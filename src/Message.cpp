@@ -30,7 +30,7 @@ std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags)
         }
 
         if (!skipIgnoredTags && fieldMap.has(FIELDS::CheckSum))
-            ostr << FIELDS::CheckSum << TAG_ASSIGNMENT_CHAR << fieldMap.get(FIELDS::CheckSum) << INTERNAL_SOH_CHAR;
+            ostr << FIELDS::CheckSum << TAG_ASSIGNMENT_CHAR << fieldMap.getField(FIELDS::CheckSum) << INTERNAL_SOH_CHAR;
     }
 
     return ostr.str();

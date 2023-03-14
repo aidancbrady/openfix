@@ -19,7 +19,7 @@ struct GroupSpec
     }
 
     FieldSet m_fields;
-    std::unordered_map<int, GroupSpec> m_groups;
+    std::unordered_map<int, std::unique_ptr<GroupSpec>> m_groups;
     std::unordered_map<int, int> m_dataLengthTags;
 
     static GroupSpec UNKNOWN;

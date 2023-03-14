@@ -44,7 +44,7 @@ enum class FieldType
 class FieldMap
 {
 public:
-    const std::string& getField(int tag) const
+    std::string getField(int tag) const
     {
         auto fit = m_fields.find(tag);
         if (fit != m_fields.end())
@@ -88,7 +88,7 @@ public:
         return it->second;
     }
 
-    FieldMap& getGroup(int tag, int idx)
+    FieldMap& getGroup(int tag, size_t idx)
     {
         auto& vec = getGroup(tag);
         if (idx >= vec.size())

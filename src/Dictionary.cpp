@@ -94,7 +94,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 continue;
             }
             
-            auto overwriteStack = [&](int curIdx) {
+            auto overwriteStack = [&](size_t curIdx) {
                 while (groupStack.size()-1 > curIdx)
                 {
                     auto& group = groupStack[groupStack.size()-1];
@@ -150,7 +150,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                     
                     // create a new group
                     auto& fieldMap = group.m_group.get().addGroup(tag);
-                    ParserGroupInfo newGroup{groupIt->second, fieldMap};
+                    ParserGroupInfo newGroup(*groupIt->second, fieldMap);
                     newGroup.m_groupTag = tag;
                     newGroup.m_groupCount = 1;
 
@@ -210,7 +210,17 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             if (msgState == MessageState::HEADER)
             {
                 groupStack.pop_back();
-                groupStack.emplace_back(m_headerSpec, ret.getBody());
+
+                auto it = m_bodySpecs.end();
+                std::string msgType;
+                try {
+                    msgType = ret.getHeader().getField(FIELDS::MsgType);
+                    it = m_bodySpecs.find(msgType);
+                } catch(...) {
+                    TRY_LOG_ERROR("Unknown message: " << msgType);
+                }
+
+                groupStack.emplace_back(it == m_bodySpecs.end() ? GroupSpec::UNKNOWN : it->second, ret.getBody());
                 msgState = MessageState::BODY;
             }
 
@@ -270,9 +280,9 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 auto it = dataLengthTagMap.find(tag);
                 if (it != dataLengthTagMap.end())
                 {
-                    int length = 0;
+                    size_t length = 0;
                     try {
-                        length = std::atoi(curGroup().getField(it->second).c_str());
+                        length = static_cast<size_t>(std::atoi(curGroup().getField(it->second).c_str()));
                     } catch (...) {
                         TRY_LOG_THROW("Couldn't parse data field (tag=" << tag << ")");
                     }
@@ -314,7 +324,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
         // verify bodylength
         auto expectedLength = text.size() - bodyLengthStart - 7;
         try {
-            auto bodyLength = std::atoi(ret.getHeader().getField(FIELDS::BodyLength).c_str());
+            auto bodyLength = static_cast<unsigned long>(std::atol(ret.getHeader().getField(FIELDS::BodyLength).c_str()));
             if (expectedLength != bodyLength)
                 throw std::exception();
         } catch (...) {
@@ -336,7 +346,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
             if (tag != FIELDS::CheckSum)
                 TRY_LOG_THROW("Message didn't end in checksum");
-            auto& checksumRet = ret.getFooter().getField(FIELDS::CheckSum);
+            const auto& checksumRet = ret.getFooter().getField(FIELDS::CheckSum);
 
             if (checksumRet != checksumStr)
             {

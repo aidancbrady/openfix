@@ -101,17 +101,17 @@ template<typename Class>
 class StaticConfig : public Config<Class>
 {
 public:
-    static const std::string& getString(const BaseConfigItem<Class, std::string>& item) const
+    static const std::string& getString(const BaseConfigItem<Class, std::string>& item)
     {
         return instance().getString(item);
     }
 
-    static long getLong(const BaseConfigItem<Class, long>& item) const
+    static long getLong(const BaseConfigItem<Class, long>& item)
     {
         return instance().getLong(item);
     }
 
-    static bool getBool(const BaseConfigItem<Class, bool>& item) const
+    static bool getBool(const BaseConfigItem<Class, bool>& item)
     {
         return instance().getBool(item);
     }
