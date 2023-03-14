@@ -42,8 +42,8 @@ public:
     {
         for (const auto& [key, val] : settings)
         {
-            auto it = m_fields.find(key);
-            if (it == m_fields.end())
+            auto it = defaults().m_fields.find(key);
+            if (it == defaults().m_fields.end())
             {
                 LOG_WARN("Unknown configuration field: " << key);
                 continue;
@@ -61,34 +61,43 @@ public:
 protected:
     static inline ConfigItem<std::string> createString(std::string name, const std::string& defaultValue = "")
     {
-        s_defaultStrings.push_back(defaultValue);
-        m_fields.insert({name, {typeid(std::string), s_defaultStrings.size() - 1}});
-        return {name, defaultValue, s_defaultStrings.size() - 1};
+        defaults().m_strings.push_back(defaultValue);
+        defaults().m_fields.insert({name, {typeid(std::string), defaults().m_strings.size() - 1}});
+        return {name, defaultValue, defaults().m_strings.size() - 1};
     }
 
     static inline ConfigItem<long> createLong(std::string name, long defaultValue = 0L)
     {
-        s_defaultLongs.push_back(defaultValue);
-        m_fields.insert({name, {typeid(long), s_defaultLongs.size() - 1}});
-        return {name, defaultValue, s_defaultLongs.size() - 1};
+        defaults().m_longs.push_back(defaultValue);
+        defaults().m_fields.insert({name, {typeid(long), defaults().m_longs.size() - 1}});
+        return {name, defaultValue, defaults().m_longs.size() - 1};
     }
 
     static inline ConfigItem<bool> createBool(std::string name, bool defaultValue = false)
     {
-        s_defaultBools.push_back(defaultValue);
-        m_fields.insert({name, {typeid(bool), s_defaultBools.size() - 1}});
-        return {name, defaultValue, s_defaultBools.size() - 1};
+        defaults().m_bools.push_back(defaultValue);
+        defaults().m_fields.insert({name, {typeid(bool), defaults().m_bools.size() - 1}});
+        return {name, defaultValue, defaults().m_bools.size() - 1};
     }
 
 private:
-    Config() : m_stringValues(s_defaultStrings), m_longValues(s_defaultLongs), m_boolValues(s_defaultBools)
+    Config() : m_stringValues(defaults().m_strings), m_longValues(defaults().m_longs), m_boolValues(defaults().m_bools)
     {}
 
-    static inline std::unordered_map<std::string, std::pair<std::type_index, size_t>> m_fields;
+    struct Defaults
+    {
+        std::unordered_map<std::string, std::pair<std::type_index, size_t>> m_fields;
 
-    static inline std::vector<std::string> s_defaultStrings;
-    static inline std::vector<long> s_defaultLongs;
-    static inline std::vector<bool> s_defaultBools;
+        std::vector<std::string> m_strings;
+        std::vector<long> m_longs;
+        std::vector<bool> m_bools;
+    };
+
+    static Defaults& defaults()
+    {
+        static Defaults defaults;
+        return defaults;
+    }
 
     std::vector<std::string> m_stringValues;
     std::vector<long> m_longValues;

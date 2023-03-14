@@ -1,9 +1,20 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_binary")
 
-cc_binary(
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
     name = "openfix",
-    srcs = glob(["*.h", "*.cpp"]),
+    include_prefix = "openfix",
+    hdrs = glob(["*.h"]),
+    srcs = glob(["*.cpp"]),
     deps = [
         "//openfix/lib/pugixml"
+    ]
+)
+
+cc_binary(
+    name = "openfix-exe",
+    deps = [
+        ":openfix"
     ]
 )
