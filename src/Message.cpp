@@ -51,7 +51,7 @@ std::ostream& operator<<(std::ostream& ostr, const Message& msg)
     std::string body;
     body += printGroup(msg.m_header, true);
     body += printGroup(msg.m_body, true);
-    body += printGroup(msg.m_footer, true);
+    body += printGroup(msg.m_trailer, true);
     ret << FIELDS::BodyLength << TAG_ASSIGNMENT_CHAR << body.size() << INTERNAL_SOH_CHAR;
     ret << body;
     body = ret.str();

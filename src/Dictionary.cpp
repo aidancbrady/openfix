@@ -2,6 +2,11 @@
 
 #include "Fields.h"
 
+#include <pugixml/pugixml.hpp>
+
+#include <list>
+#include <functional>
+
 GroupSpec GroupSpec::UNKNOWN;
 
 enum class MessageState
@@ -224,10 +229,10 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 msgState = MessageState::BODY;
             }
 
-            // if we're in the body, see if we can move to the footer
+            // if we're in the body, see if we can move to the trailer
             if (msgState == MessageState::BODY)
             {
-                auto test = ParserGroupInfo(m_footerSpec, ret.getFooter());
+                auto test = ParserGroupInfo(m_trailerSpec, ret.getFooter());
                 if (trySetField(test, 0))
                 {
                     groupStack[0] = test;
@@ -366,10 +371,246 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     auto it = m_dictionaries.find(path);
     if (it != m_dictionaries.end())
         return it->second;
+
+    LOG_INFO("Loading FIX dictionary at path: " << path);
     
+    pugi::xml_document doc;
+    pugi::xml_parse_result result = doc.load_file("tree.xml");
+
+    if (!result)
+    {
+        LOG_FATAL("Unable to load FIX dictionary: " << result.description());
+        return nullptr;
+    }
+
     auto dict = std::make_shared<Dictionary>();
 
-    
+    auto header = doc.child("header");
+    if (header.empty())
+    {
+        LOG_FATAL("FIX dictionary missing <header> section");
+        return nullptr;
+    }
+
+    auto trailer = doc.child("trailer");
+    if (trailer.empty())
+    {
+        LOG_FATAL("FIX dictionary missing <trailer> section");
+        return nullptr;
+    }
+
+    std::unordered_map<std::string, int> fieldMap;
+
+    auto fields = doc.child("fields");
+    for (auto field : doc.children())
+    {
+        int tag = field.attribute("number").as_int(-1);
+        std::string name = field.attribute("name").as_string();
+        std::string type = field.attribute("type").as_string();
+        if (tag == -1 || name.empty() || type.empty())
+        {
+            LOG_FATAL("Invalid <field> definition: " << field);
+            return nullptr;
+        }
+
+        auto it = FIELD_TYPE_LOOKUP.find(type);
+        if (it == FIELD_TYPE_LOOKUP.end())
+        {
+            LOG_FATAL("Unknown field type: " << type);
+            return nullptr;
+        }
+
+        if (dict->m_fields.find(tag) != dict->m_fields.end())
+        {
+            LOG_FATAL("Multiple field definitions for tag: " << tag);
+            return nullptr;
+        }
+
+        dict->m_fields[tag] = it->second;
+        fieldMap[name] = tag;
+    }
+
+    auto components = doc.child("components");
+    std::unordered_map<std::string, GroupSpec> componentMap;
+
+    std::unordered_map<std::string, pugi::xml_node> componentXMLMap;
+    std::unordered_map<std::string, std::unordered_set<std::string>> componentGraph;
+
+    // fully qualified name since we call this recursively
+    std::function<void(const pugi::xml_node&, std::string)> validateGroup = [&](const pugi::xml_node& node, std::string parentComponent) {
+        for (const auto& child : node)
+        {
+            if (child.name() == "component")
+            {
+                std::string componentName = child.attribute("name").as_string();
+                if (componentName.empty())
+                {
+                    LOG_FATAL("Tried to reference a component without specifying a name");
+                    return nullptr;
+                }
+                if (componentMap.find(componentName) == componentMap.end())
+                {
+                    LOG_FATAL("Tried to reference undefined component: " << componentName);
+                    return nullptr;
+                }
+
+                // no dupe checking for now, doesn't have an impact anyway
+                if (!parentComponent.empty())
+                    componentGraph[parentComponent].insert(componentName);
+            }
+            else if (child.name() == "group")
+            {
+                std::string groupName = child.attribute("name").as_string();
+                if (groupName.empty())
+                {
+                    LOG_FATAL("Tried to reference a group without specifying a name");
+                    return nullptr;
+                }
+                auto it = fieldMap.find(groupName);
+                if (it == fieldMap.end())
+                {
+                    LOG_FATAL("Tried to reference undefined group: " << groupName);
+                    return nullptr;
+                }
+
+                validateGroup(child, parentComponent);
+            }
+            else if (child.name() == "field")
+            {
+                std::string fieldName = child.attribute("name").as_string();
+                if (fieldName.empty())
+                {
+                    LOG_FATAL("Tried to reference a field without specifying a name");
+                    return nullptr;
+                }
+                auto it = fieldMap.find(fieldName);
+                if (it == fieldMap.end())
+                {
+                    LOG_FATAL("Tried to reference undefined field: " << fieldName);
+                    return nullptr;
+                }
+            }
+            else
+            {
+                // unknown definition, ignore
+            }
+        }
+    };
+
+    // first pass, initialize our maps
+    for (const auto& component : components.children())
+    {
+        std::string name = component.attribute("name").as_string();
+        if (name.empty())
+        {
+            LOG_FATAL("Component definition missing name");
+            return nullptr;
+        }
+
+        if (componentMap.find(name) != componentMap.end())
+        {
+            LOG_FATAL("Multiple component definitions with name: " << name);
+            return nullptr;
+        }
+
+        componentMap[name] = {};
+        componentXMLMap[name] = component;
+    }
+
+    // second pass, validate & build our graph
+    for (const auto& component : components.children())
+    {
+        std::string name = component.attribute("name").as_string();
+        // treat this like a group, validate fields and populate our component graph
+        validateGroup(component, name);
+    }
+
+    // third pass, toposort
+    std::vector<std::string> sorted;
+    {
+        std::unordered_map<std::string, int> indegrees;
+        for (const auto& [node, children] : componentGraph)
+            for (const auto& child : children)
+                ++indegrees[child];
+        std::list<std::string> workingList;
+        for (const auto& [k, i] : indegrees)
+            if (i == 0)
+                workingList.push_front(k);
+        
+        while (!workingList.empty())
+        {
+            std::string node = workingList.back();
+            sorted.push_back(node);
+            workingList.pop_back();
+            for (const auto& [k, i] : indegrees)
+            {
+                if (componentGraph[k].find(node) != componentGraph[k].end())
+                    --indegrees[k];
+                if (indegrees[k] == 0)
+                    workingList.push_front(k);
+            }
+        }
+
+        if (sorted.size() != componentGraph.size())
+        {
+            LOG_FATAL("Cycle in component graph!");
+            return nullptr;
+        }
+    }
+
+    std::function<std::unique_ptr<GroupSpec>(const pugi::xml_node&)> buildGroup = [&](const pugi::xml_node& node) {
+        std::unique_ptr<GroupSpec> ret;
+
+        for (const auto& field : node)
+        {
+            if (field.name() == "component")
+            {
+                // this must be a completed component; just merge everything in
+
+            }
+            else if (field.name() == "group")
+            {
+                std::string groupName = field.attribute("name").as_string();
+                int tag = fieldMap[groupName];
+                ret->m_groups[tag] = buildGroup(field);
+            }
+            else if (field.name() == "field")
+            {
+                std::string fieldName = field.attribute("name").as_string();
+                ret->m_fields.insert(fieldMap[fieldName]);
+            }
+        }
+
+        return ret;
+    };
+
+    // go through components in topologically sorted order, building out component map
+    for (const auto& name : sorted)
+    {
+        auto& node = componentXMLMap[name];
+        componentMap[name] = *buildGroup(node);
+    }
+
+    // build header
+    dict->m_headerSpec = *buildGroup(header);
+    // build trailer
+    dict->m_trailerSpec = *buildGroup(trailer);
+    // build messages
+    for (const auto& node : doc.child("messages").children())
+    {
+        std::string msgtype = node.attribute("msgtype").as_string();
+        if (empty(msgtype))
+        {
+            LOG_FATAL("msgtype definition missing from message");
+            return nullptr;
+        }
+        if (dict->m_bodySpecs.find(msgtype) != dict->m_bodySpecs.end())
+        {
+            LOG_FATAL("Redefinition of message type: " << msgtype);
+            return nullptr;
+        }
+        dict->m_bodySpecs[msgtype] = *buildGroup(node);
+    }
 
     m_dictionaries[path] = dict;
     return dict;

@@ -13,33 +13,20 @@ inline constexpr char EXTERNAL_SOH_CHAR = '|';
 
 inline constexpr char TAG_ASSIGNMENT_CHAR = '=';
 
-enum class FieldType
-{
-    CHAR,
-    BOOLEAN,
-    FLOAT,
-    AMT,
-    PRICE,
-    PRICE_OFFSET,
-    QTY,
-    PERCENTAGE,
-    INT,
-    DAY_OF_MONTH,
-    LENGTH,
-    NUM_IN_GROUP,
-    SEQ_NUM,
-    STRING,
-    // DATA,
-    MONTH_YEAR,
-    CURRENCY,
-    EXCHANGE,
-    LOCAL_MKT_DATE,
-    MULTIPLE_VALUE_STRING,
-    UTC_DATE,
-    UTC_TIME_ONLY,
-    UTC_TIMESTAMP,
-    COUNTRY
-};
+#define FIELD_TYPES    \
+    F(UNKNOWN),        \
+    F(INT),            \
+    F(FLOAT),          \
+    F(CHAR),           \
+    F(STRING),         \
+    F(DATA)            
+
+#define F(x) x
+enum class FieldType { F(FIELD_TYPES) };
+#undef F
+#define F(x) {#x, FieldType::x}
+std::unordered_map<std::string, FieldType> FIELD_TYPE_LOOKUP { FIELD_TYPES };
+#undef F
 
 class FieldMap
 {
@@ -151,7 +138,7 @@ public:
 
     FieldMap& getFooter()
     {
-        return m_footer;
+        return m_trailer;
     }
 
     FieldMap& getBody()
@@ -168,7 +155,7 @@ public:
 
 private:
     FieldMap m_header;
-    FieldMap m_footer;
+    FieldMap m_trailer;
 
     FieldMap m_body;
 

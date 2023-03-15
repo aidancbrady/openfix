@@ -20,6 +20,9 @@ template<typename Class>
 class Config
 {
 public:
+    Config() : m_stringValues(defaults().m_strings), m_longValues(defaults().m_longs), m_boolValues(defaults().m_bools)
+    {}
+
     template<typename Type>
     using ConfigItem = BaseConfigItem<Class, Type>;
 
@@ -81,9 +84,6 @@ protected:
     }
 
 private:
-    Config() : m_stringValues(defaults().m_strings), m_longValues(defaults().m_longs), m_boolValues(defaults().m_bools)
-    {}
-
     struct Defaults
     {
         std::unordered_map<std::string, std::pair<std::type_index, size_t>> m_fields;

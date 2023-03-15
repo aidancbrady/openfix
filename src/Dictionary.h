@@ -11,7 +11,7 @@
 
 struct GroupSpec
 {
-    using FieldSet = std::unordered_map<int, FieldType>;
+    using FieldSet = std::unordered_set<int>;
     
     bool empty() const
     {
@@ -30,11 +30,20 @@ class Dictionary
 public:
     Message parse(const SessionSettings& settings, const std::string& text) const;
 
+    FieldType getFieldType(int tag)
+    {
+        auto it = m_fields.find(tag);
+        if (it == m_fields.end())
+            return FieldType::UNKNOWN;
+        return it->second;
+    }
+
 private:
     GroupSpec m_headerSpec;
-    GroupSpec m_footerSpec;
+    GroupSpec m_trailerSpec;
 
     std::unordered_map<std::string, GroupSpec> m_bodySpecs;
+    std::unordered_map<int, FieldType> m_fields;
 
     friend class DictionaryRegistry;
 
@@ -54,4 +63,6 @@ public:
 
 private:
     std::unordered_map<std::string, std::shared_ptr<Dictionary>> m_dictionaries;
+
+    CREATE_LOGGER("DictionaryRegistry");
 };
