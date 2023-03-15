@@ -19,8 +19,7 @@ struct GroupSpec
     }
 
     FieldSet m_fields;
-    std::unordered_map<int, std::unique_ptr<GroupSpec>> m_groups;
-    std::unordered_map<int, int> m_dataLengthTags;
+    std::unordered_map<int, std::shared_ptr<GroupSpec>> m_groups;
 
     static GroupSpec UNKNOWN;
 };
@@ -30,7 +29,7 @@ class Dictionary
 public:
     Message parse(const SessionSettings& settings, const std::string& text) const;
 
-    FieldType getFieldType(int tag)
+    FieldType getFieldType(int tag) const
     {
         auto it = m_fields.find(tag);
         if (it == m_fields.end())

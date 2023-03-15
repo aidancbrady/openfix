@@ -15,9 +15,21 @@ struct FieldNotFound : public std::exception
     int m_tag;
 };
 
-struct ParsingError : public std::exception
+struct MessageParsingError : public std::exception
 {
-    ParsingError(std::string error) : m_error(std::move(error)) {}
+    MessageParsingError(std::string error) : m_error(std::move(error)) {}
+
+    const char* what() const throw()
+    {
+        return m_error.c_str();
+    }
+
+    std::string m_error;
+};
+
+struct DictionaryParsingError : public std::exception
+{
+    DictionaryParsingError(std::string error) : m_error(std::move(error)) {}
 
     const char* what() const throw()
     {

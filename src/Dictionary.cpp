@@ -6,6 +6,7 @@
 
 #include <list>
 #include <functional>
+#include <strings.h>
 
 GroupSpec GroupSpec::UNKNOWN;
 
@@ -18,7 +19,7 @@ enum class MessageState
 
     HEADER,
     BODY,
-    FOOTER
+    TRAILER
 };
 
 enum class ParserState
@@ -50,7 +51,7 @@ struct ParserGroupInfo
     std::ostringstream ostr;                             \
     ostr << msg;                                         \
     TRY_LOG_ERROR(ostr.str());                           \
-    if (!relaxedParsing) throw ParsingError(ostr.str()); \
+    if (!relaxedParsing) throw MessageParsingError(ostr.str()); \
 }
 
 Message Dictionary::parse(const SessionSettings& settings, const std::string& text) const
@@ -76,6 +77,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     int checksum = 0;
     int tag = 0;
     int bodyLengthStart = 0;
+    int dataLength = -1;
 
     for (size_t i = 0; i < text.size(); ++i)
     {
@@ -98,6 +100,19 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 TRY_LOG_WARN("Message has repeating SOH characters (idx=" << i << ")");
                 continue;
             }
+
+            auto setField = [&](FieldMap& fieldMap, int tag, std::string value) {
+                if (getFieldType(tag) == FieldType::LENGTH)
+                {
+                    try {
+                        dataLength = static_cast<size_t>(std::atoi(value.c_str()));
+                    } catch (...) {
+                        TRY_LOG_THROW("Couldn't parse data field (tag=" << tag << ")");
+                    }
+                }
+                
+                fieldMap.setField(tag, value);
+            };
             
             auto overwriteStack = [&](size_t curIdx) {
                 while (groupStack.size()-1 > curIdx)
@@ -121,7 +136,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
                     // create a duplicate group with this tag
                     auto& newGroup = groupStack[groupIdx-1].m_group.get().addGroup(group.m_groupTag);
-                    newGroup.setField(tag, value);
+                    setField(newGroup, tag, value);
                     // replace current group on stack with new gruop
                     group.m_group = std::ref(newGroup);
                     ++group.m_groupCount;
@@ -142,7 +157,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                     if (group.m_group.get().has(tag))
                         return handleRepeatingTag(group, groupIdx);
 
-                    group.m_group.get().setField(tag, value);
+                    setField(group.m_group.get(), tag, value);
                     return groupIdx;
                 }
 
@@ -222,7 +237,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                     msgType = ret.getHeader().getField(FIELDS::MsgType);
                     it = m_bodySpecs.find(msgType);
                 } catch(...) {
-                    TRY_LOG_ERROR("Unknown message: " << msgType);
+                    TRY_LOG_THROW("Unknown message: " << msgType);
                 }
 
                 groupStack.emplace_back(it == m_bodySpecs.end() ? GroupSpec::UNKNOWN : it->second, ret.getBody());
@@ -242,7 +257,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
             // unknown field, all attempts failed; we assume it's in the current group
             TRY_LOG_ERROR("Unknown field (tag=" << tag << ")");
-            groupStack[groupStack.size()-1].m_group.get().setField(tag, value);
+            setField(curGroup(), tag, value);
 
             key.clear();
             value.clear();
@@ -278,25 +293,19 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 fail = true;
             }
 
-            if (!fail)
+            if (!fail && dataLength >= 0)
             {
                 // data field handling
-                const auto& dataLengthTagMap = curSpec().m_dataLengthTags;
-                auto it = dataLengthTagMap.find(tag);
-                if (it != dataLengthTagMap.end())
-                {
-                    size_t length = 0;
-                    try {
-                        length = static_cast<size_t>(std::atoi(curGroup().getField(it->second).c_str()));
-                    } catch (...) {
-                        TRY_LOG_THROW("Couldn't parse data field (tag=" << tag << ")");
-                    }
-                    for (size_t j = 0; j < length; ++j)
-                        value += text[i + j + 1];
-                    curGroup().setField(tag, value);
-                    i += length;
-                    continue;
-                }
+                if (getFieldType(tag) != FieldType::DATA)
+                    TRY_LOG_ERROR("Field following length tag is not a data tag");
+                if (i + dataLength >= text.size())
+                    TRY_LOG_THROW("Data tag length would exceed message size");
+                for (size_t j = 0; j < static_cast<size_t>(dataLength); ++j)
+                    value += text[i + j + 1];
+                curGroup().setField(tag, value);
+                i += dataLength;
+                dataLength = -1;
+                continue;
             }
 
             if (fail)
@@ -319,6 +328,9 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             value += c;
         }
     }
+
+    if (msgState != MessageState::TRAILER)
+        TRY_LOG_THROW("Incomplete message");
 
     // missing trailing SOH char
     if (state != ParserState::NEXT)
@@ -378,53 +390,35 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     pugi::xml_parse_result result = doc.load_file("tree.xml");
 
     if (!result)
-    {
-        LOG_FATAL("Unable to load FIX dictionary: " << result.description());
-        return nullptr;
-    }
+        throw DictionaryParsingError("Unable to load FIX dictionary: " + std::string(result.description()));
 
     auto dict = std::make_shared<Dictionary>();
 
     auto header = doc.child("header");
     if (header.empty())
-    {
-        LOG_FATAL("FIX dictionary missing <header> section");
-        return nullptr;
-    }
+        throw DictionaryParsingError("FIX dictionary missing <header> section");
 
     auto trailer = doc.child("trailer");
     if (trailer.empty())
-    {
-        LOG_FATAL("FIX dictionary missing <trailer> section");
-        return nullptr;
-    }
+        throw DictionaryParsingError("FIX dictionary missing <trailer> section");
 
     std::unordered_map<std::string, int> fieldMap;
 
     auto fields = doc.child("fields");
-    for (auto field : doc.children())
+    for (auto field : fields.children())
     {
         int tag = field.attribute("number").as_int(-1);
         std::string name = field.attribute("name").as_string();
         std::string type = field.attribute("type").as_string();
         if (tag == -1 || name.empty() || type.empty())
-        {
-            LOG_FATAL("Invalid <field> definition: " << field);
-            return nullptr;
-        }
+            throw DictionaryParsingError("Invalid <field> definition");
 
-        auto it = FIELD_TYPE_LOOKUP.find(type);
-        if (it == FIELD_TYPE_LOOKUP.end())
-        {
-            LOG_FATAL("Unknown field type: " << type);
-            return nullptr;
-        }
+        auto it = FieldTypes::LOOKUP.find(type);
+        if (it == FieldTypes::LOOKUP.end())
+            throw DictionaryParsingError("Unknown field type: " + type);
 
         if (dict->m_fields.find(tag) != dict->m_fields.end())
-        {
-            LOG_FATAL("Multiple field definitions for tag: " << tag);
-            return nullptr;
-        }
+            throw DictionaryParsingError("Multiple field definitions for tag: " + std::to_string(tag));
 
         dict->m_fields[tag] = it->second;
         fieldMap[name] = tag;
@@ -440,55 +434,37 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     std::function<void(const pugi::xml_node&, std::string)> validateGroup = [&](const pugi::xml_node& node, std::string parentComponent) {
         for (const auto& child : node)
         {
-            if (child.name() == "component")
+            if (strcasecmp(child.name(), "component") == 0)
             {
                 std::string componentName = child.attribute("name").as_string();
                 if (componentName.empty())
-                {
-                    LOG_FATAL("Tried to reference a component without specifying a name");
-                    return nullptr;
-                }
+                    throw DictionaryParsingError("Tried to reference a component without specifying a name");
                 if (componentMap.find(componentName) == componentMap.end())
-                {
-                    LOG_FATAL("Tried to reference undefined component: " << componentName);
-                    return nullptr;
-                }
+                    throw DictionaryParsingError("Tried to reference undefined component: " + componentName);
 
                 // no dupe checking for now, doesn't have an impact anyway
                 if (!parentComponent.empty())
                     componentGraph[parentComponent].insert(componentName);
             }
-            else if (child.name() == "group")
+            else if (strcasecmp(child.name(), "group") == 0)
             {
                 std::string groupName = child.attribute("name").as_string();
                 if (groupName.empty())
-                {
-                    LOG_FATAL("Tried to reference a group without specifying a name");
-                    return nullptr;
-                }
+                    throw DictionaryParsingError("Tried to reference a group without specifying a name");
                 auto it = fieldMap.find(groupName);
                 if (it == fieldMap.end())
-                {
-                    LOG_FATAL("Tried to reference undefined group: " << groupName);
-                    return nullptr;
-                }
+                    throw DictionaryParsingError("Tried to reference undefined group: " + groupName);
 
                 validateGroup(child, parentComponent);
             }
-            else if (child.name() == "field")
+            else if (strcasecmp(child.name(), "field") == 0)
             {
                 std::string fieldName = child.attribute("name").as_string();
                 if (fieldName.empty())
-                {
-                    LOG_FATAL("Tried to reference a field without specifying a name");
-                    return nullptr;
-                }
+                    throw DictionaryParsingError("Tried to reference a field without specifying a name");
                 auto it = fieldMap.find(fieldName);
                 if (it == fieldMap.end())
-                {
-                    LOG_FATAL("Tried to reference undefined field: " << fieldName);
-                    return nullptr;
-                }
+                    throw DictionaryParsingError("Tried to reference undefined field: " + fieldName);
             }
             else
             {
@@ -502,16 +478,10 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     {
         std::string name = component.attribute("name").as_string();
         if (name.empty())
-        {
-            LOG_FATAL("Component definition missing name");
-            return nullptr;
-        }
+            throw DictionaryParsingError("Component definition missing name");
 
         if (componentMap.find(name) != componentMap.end())
-        {
-            LOG_FATAL("Multiple component definitions with name: " << name);
-            return nullptr;
-        }
+            throw DictionaryParsingError("Multiple component definitions with name: " + name);
 
         componentMap[name] = {};
         componentXMLMap[name] = component;
@@ -552,31 +522,40 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
         }
 
         if (sorted.size() != componentGraph.size())
-        {
-            LOG_FATAL("Cycle in component graph!");
-            return nullptr;
-        }
+            throw DictionaryParsingError("Cycle in component graph!");
     }
 
-    std::function<std::unique_ptr<GroupSpec>(const pugi::xml_node&)> buildGroup = [&](const pugi::xml_node& node) {
-        std::unique_ptr<GroupSpec> ret;
+    std::function<std::shared_ptr<GroupSpec>(const pugi::xml_node&)> buildGroup = [&](const pugi::xml_node& node) {
+        std::shared_ptr<GroupSpec> ret;
 
         for (const auto& field : node)
         {
-            if (field.name() == "component")
+            if (strcasecmp(field.name(), "component") == 0)
             {
+                std::string componentName = field.attribute("name").as_string();
                 // this must be a completed component; just merge everything in
-
+                auto& component = componentMap[componentName];
+                for (auto tag : component.m_fields)
+                    if (!ret->m_fields.insert(tag).second)
+                        throw DictionaryParsingError("Multiple references of field in group: " + std::to_string(tag));
+                for (auto& entry : component.m_groups)
+                    if (!ret->m_groups.insert(entry).second)
+                        throw DictionaryParsingError("Multiple references of group in group: " + std::to_string(entry.first));
             }
-            else if (field.name() == "group")
+            else if (strcasecmp(field.name(), "group") == 0)
             {
                 std::string groupName = field.attribute("name").as_string();
                 int tag = fieldMap[groupName];
+                if (ret->m_groups.find(tag) != ret->m_groups.end())
+                    throw DictionaryParsingError("Multiple references of group in group: " + std::to_string(tag));
                 ret->m_groups[tag] = buildGroup(field);
             }
-            else if (field.name() == "field")
+            else if (strcasecmp(field.name(), "field") == 0)
             {
                 std::string fieldName = field.attribute("name").as_string();
+                int tag = fieldMap[fieldName];
+                if (ret->m_fields.find(tag) != ret->m_fields.end())
+                    throw DictionaryParsingError("Multiple references of field in group: " + std::to_string(tag));
                 ret->m_fields.insert(fieldMap[fieldName]);
             }
         }
@@ -600,15 +579,9 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     {
         std::string msgtype = node.attribute("msgtype").as_string();
         if (empty(msgtype))
-        {
-            LOG_FATAL("msgtype definition missing from message");
-            return nullptr;
-        }
+            throw DictionaryParsingError("msgtype definition missing from message");
         if (dict->m_bodySpecs.find(msgtype) != dict->m_bodySpecs.end())
-        {
-            LOG_FATAL("Redefinition of message type: " << msgtype);
-            return nullptr;
-        }
+            throw DictionaryParsingError("Redefinition of message type: " + msgtype);
         dict->m_bodySpecs[msgtype] = *buildGroup(node);
     }
 

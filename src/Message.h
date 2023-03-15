@@ -19,14 +19,20 @@ inline constexpr char TAG_ASSIGNMENT_CHAR = '=';
     F(FLOAT),          \
     F(CHAR),           \
     F(STRING),         \
+    F(LENGTH),         \
     F(DATA)            
 
 #define F(x) x
 enum class FieldType { F(FIELD_TYPES) };
 #undef F
-#define F(x) {#x, FieldType::x}
-std::unordered_map<std::string, FieldType> FIELD_TYPE_LOOKUP { FIELD_TYPES };
-#undef F
+struct FieldTypes
+{
+    #define F(x) {#x, FieldType::x}
+    inline static std::unordered_map<std::string, FieldType> LOOKUP { FIELD_TYPES };
+    #undef F
+};
+
+
 
 class FieldMap
 {
