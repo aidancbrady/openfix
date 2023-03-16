@@ -19,14 +19,10 @@ std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags)
                 continue;
 
             ostr << k << TAG_ASSIGNMENT_CHAR << v << INTERNAL_SOH_CHAR;
-        }
 
-        for (const auto& [k, v] : fieldMap.getGroups())
-        {
-            for (const auto& group : v)
-            {
-                ostr << group;
-            }
+            if (fieldMap.getGroupCount(k) > 0)
+                for (const auto& group : fieldMap.getGroups(k))
+                    ostr << group;
         }
 
         if (!skipIgnoredTags && fieldMap.has(FIELDS::CheckSum))

@@ -26,14 +26,29 @@ public:
     template<typename Type>
     using ConfigItem = BaseConfigItem<Class, Type>;
 
+    void setString(const ConfigItem<std::string>& item, std::string value)
+    {
+        m_stringValues[item.index] = std::move(value);
+    }
+
     const std::string& getString(const ConfigItem<std::string>& item) const
     {
         return m_stringValues[item.index];
     }
 
+    void setLong(const ConfigItem<long>& item, long value)
+    {
+        m_longValues[item.index] = value;
+    }
+
     long getLong(const ConfigItem<long>& item) const
     {
         return m_longValues[item.index];
+    }
+
+    void setBool(const ConfigItem<bool>& item, bool value)
+    {
+        m_boolValues[item.index] = value;
     }
 
     bool getBool(const ConfigItem<bool>& item) const

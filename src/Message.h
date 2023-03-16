@@ -13,13 +13,37 @@ inline constexpr char EXTERNAL_SOH_CHAR = '|';
 
 inline constexpr char TAG_ASSIGNMENT_CHAR = '=';
 
-#define FIELD_TYPES    \
-    F(UNKNOWN),        \
-    F(INT),            \
-    F(FLOAT),          \
-    F(CHAR),           \
-    F(STRING),         \
-    F(LENGTH),         \
+#define FIELD_TYPES         \
+    F(UNKNOWN),             \
+                            \
+    F(INT),                 \
+    F(LENGTH),              \
+    F(NUMINGROUP),          \
+    F(SEQNUM),              \
+    F(TAGNUM),              \
+    F(DAYOFMONTH),          \
+                            \
+    F(FLOAT),               \
+    F(QTY),                 \
+    F(PRICE),               \
+    F(PRICEOFFSET),         \
+    F(AMT),                 \
+    F(PERCENTAGE),          \
+                            \
+    F(CHAR),                \
+    F(BOOLEAN),             \
+                            \
+    F(STRING),              \
+    F(MULTIPLEVALUESTRING), \
+    F(COUNTRY),             \
+    F(CURRENCY),            \
+    F(EXCHANGE),            \
+    F(MONTHYEAR),           \
+    F(UTCTIMESTAMP),        \
+    F(UTCTIMEONLY),         \
+    F(UTCDATEONLY),         \
+    F(LOCALMKTDATE),        \
+                            \
     F(DATA)            
 
 #define F(x) x
@@ -31,8 +55,6 @@ struct FieldTypes
     inline static std::unordered_map<std::string, FieldType> LOOKUP { FIELD_TYPES };
     #undef F
 };
-
-
 
 class FieldMap
 {
@@ -73,21 +95,26 @@ public:
         return it->second.size();
     }
 
-    std::vector<FieldMap>& getGroup(int tag)
-    {
-        auto it = m_groups.find(tag);
-        if (it == m_groups.end())
-            throw FieldNotFound(tag);
-        return it->second;
-    }
+    #define GET_GROUPS                \
+        auto it = m_groups.find(tag); \
+        if (it == m_groups.end())     \
+            throw FieldNotFound(tag); \
+        return it->second;            
 
-    FieldMap& getGroup(int tag, size_t idx)
-    {
-        auto& vec = getGroup(tag);
-        if (idx >= vec.size())
-            throw std::out_of_range("Tried to access group " + std::to_string(tag) + " with out-of-bounds index " + std::to_string(idx));
+    std::vector<FieldMap>& getGroups(int tag) { GET_GROUPS }
+    const std::vector<FieldMap>& getGroups(int tag) const { GET_GROUPS }
+    #undef GET_GROUPS
+
+    #define GET_GROUP                                                                \
+        auto& vec = getGroups(tag);                                                  \
+        if (idx >= vec.size())                                                       \
+            throw std::out_of_range("Tried to access group " + std::to_string(tag)   \
+                + " with out-of-bounds index " + std::to_string(idx));               \
         return vec[idx];
-    }
+
+    FieldMap& getGroup(int tag, size_t idx) { GET_GROUP }
+    const FieldMap& getGroup(int tag, size_t idx) const { GET_GROUP }
+    #undef GET_GROUP
 
     FieldMap& addGroup(int tag)
     {
@@ -115,7 +142,7 @@ public:
 
     bool has(int tag) const
     {
-        return m_fields.find(tag) != m_fields.end() || m_groups.find(tag) != m_groups.end();
+        return m_fields.find(tag) != m_fields.end();
     }
 
     std::string toString(const SessionSettings& settings);
@@ -142,7 +169,7 @@ public:
         return m_header;
     }
 
-    FieldMap& getFooter()
+    FieldMap& getTrailer()
     {
         return m_trailer;
     }
