@@ -21,6 +21,10 @@ public:
         m_delegate = delegate;
     }
 
+    void startAll();
+
+    void stopAll();
+
 private:
     std::shared_ptr<IFIXLogger> m_logger;
     std::shared_ptr<IFIXStore> m_store;

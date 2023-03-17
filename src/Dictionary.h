@@ -11,7 +11,7 @@
 
 struct GroupSpec
 {
-    using FieldSet = std::unordered_set<int>;
+    using FieldSet = std::unordered_map<int, bool>;
     
     bool empty() const
     {

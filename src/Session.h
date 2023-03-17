@@ -12,6 +12,13 @@ enum class SessionType
     INITIATOR,
 };
 
+enum class SessionState
+{
+    LOGON,
+    READY,
+    LOGOUT
+};
+
 struct SessionDelegate
 {
     ~SessionDelegate() = default;

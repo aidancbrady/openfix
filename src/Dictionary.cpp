@@ -53,6 +53,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 {
     bool loudParsing = settings.getBool(SessionSettings::LOUD_PARSING);
     bool relaxedParsing = settings.getBool(SessionSettings::RELAXED_PARSING);
+    bool validateRequired = settings.getBool(SessionSettings::VALIDATE_REQUIRED_FIELDS);
 
     Message ret;
 
@@ -74,6 +75,27 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     int bodyLengthStart = 0;
     int dataLength = -1;
     int tagCount = 0;
+
+    auto validateGroup = [&](FieldMap& group, const GroupSpec& spec) {
+        if (!validateRequired)
+            return;
+        for (const auto& field : spec.m_fields)
+        {
+            if (field.second && !group.has(field.first))
+                TRY_LOG_THROW("Message is missing required field: " << field.first);
+        }
+    };
+
+    auto overwriteStack = [&](size_t curIdx) {
+        while (groupStack.size()-1 > curIdx)
+        {
+            auto& group = groupStack[groupStack.size()-1];
+            if (group.m_groupTag > 0 && group.m_groupCount < group.m_groupMaxCount)
+                TRY_LOG_THROW("Repeating group terminated with count less than NumInGroup (tag=" << group.m_groupTag << ")");
+            validateGroup(group.m_group.get(), group.m_spec.get());
+            groupStack.pop_back();
+        }
+    };
 
     for (size_t i = 0; i < text.size(); ++i)
     {
@@ -117,16 +139,6 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
                 state = ParserState::NEXT;
             };
-            
-            auto overwriteStack = [&](size_t curIdx) {
-                while (groupStack.size()-1 > curIdx)
-                {
-                    auto& group = groupStack[groupStack.size()-1];
-                    if (group.m_groupTag > 0 && group.m_groupCount < group.m_groupMaxCount)
-                        TRY_LOG_THROW("Repeating group terminated with count less than NumInGroup (tag=" << group.m_groupTag << ")");
-                    groupStack.pop_back();
-                }
-            };
 
             auto handleRepeatingTag = [&](ParserGroupInfo& group, int groupIdx) {
                 // we've already seen this tag; are we in a group?
@@ -137,6 +149,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                         TRY_LOG_THROW("Repeating group count exceeds NumInGroup (tag=" << tag << ")");
                         return -1;
                     }
+
+                    validateGroup(group.m_group.get(), group.m_spec.get());
 
                     // create a duplicate group with this tag
                     auto& newGroup = groupStack[groupIdx-1].m_group.get().addGroup(group.m_groupTag);
@@ -217,7 +231,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             // not in current structural group. if we're in the header, move to the body
             if (msgState == MessageState::HEADER)
             {
-                groupStack.pop_back();
+                // clear group stack
+                overwriteStack(-1);
 
                 auto it = m_bodySpecs.end();
                 std::string msgType;
@@ -240,6 +255,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
                 if (newIdx >= 0)
                 {
+                    validateGroup(groupStack[0].m_group.get(), groupStack[0].m_spec.get());
                     msgState = MessageState::TRAILER;
                     groupStack[0] = test;
                     overwriteStack(newIdx);
@@ -327,6 +343,9 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             value += c;
         }
     }
+
+    // clear trailer
+    overwriteStack(-1);
 
     if (msgState != MessageState::TRAILER)
         TRY_LOG_THROW("Incomplete message");
@@ -541,9 +560,9 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
                 std::string componentName = field.attribute("name").as_string();
                 // this must be a completed component; just merge everything in
                 auto& component = componentMap[componentName];
-                for (auto tag : component.m_fields)
-                    if (!ret->m_fields.insert(tag).second)
-                        throw DictionaryParsingError("Multiple references of field in group: " + std::to_string(tag));
+                for (auto entry : component.m_fields)
+                    if (!ret->m_fields.insert(entry).second)
+                        throw DictionaryParsingError("Multiple references of field in group: " + std::to_string(entry.first));
                 for (auto& entry : component.m_groups)
                     if (!ret->m_groups.insert(entry).second)
                         throw DictionaryParsingError("Multiple references of group in group: " + std::to_string(entry.first));
@@ -559,10 +578,11 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
             else if (strcasecmp(field.name(), "field") == 0)
             {
                 std::string fieldName = field.attribute("name").as_string();
+                bool required = field.attribute("required").as_bool(false);
                 int tag = fieldMap[fieldName];
                 if (ret->m_fields.find(tag) != ret->m_fields.end())
                     throw DictionaryParsingError("Multiple references of field in group: " + std::to_string(tag));
-                ret->m_fields.insert(fieldMap[fieldName]);
+                ret->m_fields.insert({fieldMap[fieldName], required});
             }
         }
 
