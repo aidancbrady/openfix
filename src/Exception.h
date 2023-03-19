@@ -15,26 +15,14 @@ struct FieldNotFound : public std::exception
     int m_tag;
 };
 
-struct MessageParsingError : public std::exception
-{
-    MessageParsingError(std::string error) : m_error(std::move(error)) {}
+#define CREATE_STRING_EXCEPTION(name)                                           \
+    struct name : public std::exception                          \
+    {                                                                           \
+        name(std::string error) : m_error(std::move(error)) {}   \
+        const char* what() const throw() { return m_error.c_str(); }            \
+        std::string m_error;                                                    \
+    };
 
-    const char* what() const throw()
-    {
-        return m_error.c_str();
-    }
-
-    std::string m_error;
-};
-
-struct DictionaryParsingError : public std::exception
-{
-    DictionaryParsingError(std::string error) : m_error(std::move(error)) {}
-
-    const char* what() const throw()
-    {
-        return m_error.c_str();
-    }
-
-    std::string m_error;
-};
+CREATE_STRING_EXCEPTION(MessageParsingError)
+CREATE_STRING_EXCEPTION(DictionaryParsingError)
+CREATE_STRING_EXCEPTION(MisconfiguredSessionError);

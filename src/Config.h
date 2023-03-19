@@ -155,11 +155,23 @@ private:
 
 struct PlatformSettings : StaticConfig<PlatformSettings>
 {
-    static inline ConfigItem<long> INPUT_THREADS = createLong("InputThreads", 10L);
+    static inline ConfigItem<long> READER_THREADS = createLong("InputThreads", 10L);
+    static inline ConfigItem<long> WRITER_THREADS = createLong("WriterThreads", 4L);
+
+    static inline ConfigItem<long> SOCKET_SEND_BUF_SIZE = createLong("SocketSendBufSize");
+    static inline ConfigItem<long> SOCKET_RECV_BUF_SIZE = createLong("SocketRecvBufSize");
+
+    static inline ConfigItem<long> UPDATE_DELAY = createLong("UpdateDelay", 1000L);
+    static inline ConfigItem<long> EPOLL_TIMEOUT = createLong("EpollTimeout", 1000L);
+
+    static inline ConfigItem<std::string> LOG_PATH = createString("LogPath", "./log");
+    static inline ConfigItem<std::string> DATA_PATH = createString("DataPath", "./data");
 };
 
 struct SessionSettings : Config<SessionSettings>
 {
+    static inline ConfigItem<std::string> SESSION_TYPE = createString("SessionType");
+
     static inline ConfigItem<std::string> BEGIN_STRING = createString("BeginString");
 
     static inline ConfigItem<std::string> SENDER_COMP_ID = createString("SenderCompID");

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Config.h"
-#include "Connection.h"
 #include "Message.h"
+#include "Network.h"
+#include "Dictionary.h"
 
 #include <memory>
+#include <atomic>
 
 enum class SessionType
 {
@@ -26,18 +28,42 @@ struct SessionDelegate
     virtual void onMessage(const Message& msg) const {};
 };
 
-class Session
+class Session : MessageConsumer
 {
 public:
+    Session(SessionSettings settings);
+    ~Session();
+
+    void start();
+    void stop();
+
+    bool isEnabled() override
+    {
+        return m_enabled.load();
+    }
+
     void setDelegate(std::shared_ptr<SessionDelegate> delegate)
     {
         m_delegate = delegate;
     }
 
-private:
-    std::shared_ptr<Connection> m_connection;
+    void runUpdate();
 
-    std::weak_ptr<SessionDelegate> m_delegate;
+private:
+    void processMessage(const std::string& msg) override;
+
+    std::shared_ptr<Dictionary> m_dictionary;
+
+    std::shared_ptr<SessionDelegate> m_delegate;
+
+    std::weak_ptr<ConnectionHandle> m_connection;
+
+    std::atomic<bool> m_enabled;
+
+    int m_senderSeqNum;
+    int m_targetSeqNum;
+
+    SessionType m_sessionType;
 
     SessionSettings m_settings;
 };

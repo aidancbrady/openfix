@@ -4,7 +4,7 @@
 
 namespace MESSAGE
 {
-    inline std::string HERATBEAT = "0";
+    inline std::string HEARTBEAT = "0";
     inline std::string TEST_REQUEST = "1";
     inline std::string RESEND_REQUEST = "2";
     inline std::string REJECT = "3";

@@ -8,7 +8,7 @@
 class SessionRegistry
 {
 public:
-    const std::shared_ptr<Session>& createSession(std::string name, const SessionSettings& settings);
+  //  const std::shared_ptr<Session>& createSession(std::string name, const SessionSettings& settings);
 
 private:
     std::unordered_map<std::string, std::shared_ptr<Session>> m_sessionMap;
