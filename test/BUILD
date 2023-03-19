@@ -5,7 +5,7 @@ cc_test(
     srcs = glob(["*.h", "*.cpp"]),
     data = [":FIXDictionary.xml"],
     deps = [
-        "//openfix/src:openfix",
+        "//src:openfix",
         "@com_google_googletest//:gtest_main"
     ],
 )

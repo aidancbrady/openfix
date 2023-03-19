@@ -30,7 +30,7 @@ protected:
 };
 
 TEST_F(MessageTest, SimpleTest) {
-    auto dict = DictionaryRegistry::instance().load("openfix/test/FIXDictionary.xml");
+    auto dict = DictionaryRegistry::instance().load("test/FIXDictionary.xml");
     SessionSettings settings;
     std::string fix = "8=FIX.4.2|9=5|35=0|10=161|";
     convert(fix);
