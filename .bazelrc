@@ -1,2 +1,0 @@
-build --action_env=BAZEL_CXXOPTS="-std=c++20"
-build:myconfig --enable_runfiles

@@ -1,14 +1,26 @@
 #include "Network.h"
 
 #include "Message.h"
+#include "Fields.h"
 
 #include <cerrno>
 #include <iostream>
 
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/epoll.h>
+
+#include <arpa/inet.h>
+
 #include <unistd.h>
 
 #define EVENT_BUF_SIZE 256
+
+const std::string BEGIN_STRING_TAG = std::to_string(FIELDS::BeginString) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string BODY_LENGTH_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELDS::BodyLength) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string SENDER_COMP_ID_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELDS::SenderCompID) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string SENDER_SUB_ID_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELDS::SenderSubID) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string CHECKSUM_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELDS::CheckSum) + std::to_string(TAG_ASSIGNMENT_CHAR);
 
 Network::Network() : m_epollFD(-1), m_running(false)
 {
@@ -37,13 +49,14 @@ void Network::start()
         throw std::runtime_error("Couldn't initialize epoll, unknown error");
     }
 
-    std::cout << m_epollFD << std::endl;
-
     for (size_t i = 0; i < m_readerThreadCount; ++i)
     {
-        m_readerThreads.emplace_back([&]() {
-            
-        });
+        m_readerThreads.push_back(std::make_unique<ReaderThread>(m_epollFD));
+    }
+
+    for (size_t i = 0; i < m_writerThreadCount; ++i)
+    {
+        m_writerThreads.push_back(std::make_unique<WriterThread>());
     }
 
     run();
@@ -55,13 +68,30 @@ void Network::stop()
 
     // wait for all threads to timeout and terminate
     for (auto& thread : m_readerThreads)
-        thread.stop();
+        thread->stop();
+    for (auto& thread : m_writerThreads)
+        thread->stop();
+
     for (auto& thread : m_readerThreads)
-        thread.join();
+        thread->join();
+    for (auto& thread : m_writerThreads)
+        thread->stop();
+
     m_readerThreads.clear();
+    m_writerThreads.clear();
     
     // finally, close epoll FD
     close(m_epollFD);
+}
+
+void Network::connect(const SessionSettings& settings)
+{
+
+}
+
+void Network::removeAcceptor(const SessionSettings& settings)
+{
+
 }
 
 ConnectionHandle Network::createHandle(int fd)
@@ -83,7 +113,7 @@ void Network::run()
         {
             for (int i = 0; i < numEvents; i++) {
                 int fd = events[i].data.fd;
-                m_readerThreads[fd % m_readerThreadCount].queue(fd);
+                m_readerThreads[fd % m_readerThreadCount]->queue(fd);
             }
         }
     }
@@ -139,6 +169,13 @@ void ReaderThread::process(int fd)
         auto it = m_acceptorSockets.find(fd);
         if (it != m_acceptorSockets.end())
         {
+            std::string address;
+            if (accept(fd, address))
+            {
+                m_unknownConnections[fd] = it->second;
+                LOG_INFO("Accepted new connection: " << address);
+            }
+
             return;
         }
     }
@@ -148,13 +185,86 @@ void ReaderThread::process(int fd)
         auto it = m_unknownConnections.find(fd);
         if (it != m_unknownConnections.end())
         {
+            auto msgs = m_buffer.read(fd);
+            if (!msgs.empty())
+            {
+                // this connection is either invalid or will be known
+                m_unknownConnections.erase(fd);
 
+                const auto& msg = msgs[0];
+                size_t ptr = msg.find(SENDER_COMP_ID_TAG);
+                if (ptr == std::string::npos)
+                {
+                    LOG_ERROR("Received message without SenderCompID");
+                    close(fd);
+                    return;
+                }
+
+                size_t end = msg.find(INTERNAL_SOH_CHAR, ptr);
+                auto cpty = msg.substr(ptr + SENDER_COMP_ID_TAG.size(), end - ptr + SENDER_COMP_ID_TAG.size());
+
+                ptr = msg.find(SENDER_SUB_ID_TAG);
+                if (ptr != std::string::npos)
+                {
+                    end = msg.find(INTERNAL_SOH_CHAR, ptr);
+                    cpty.append(":" + msg.substr(ptr + SENDER_SUB_ID_TAG.size(), end - ptr + SENDER_SUB_ID_TAG.size()));
+                }
+                else
+                {
+                    cpty.append(":*");
+                }
+
+                auto acceptorIt = it->second->m_sessions.find(ptr);
+                if (acceptorIt == it->second->m_sessions.end())
+                {
+                    LOG_ERROR("Received connection from unknown counterparty: " cpty);
+                    close(fd);
+                    return;
+                }
+
+                // create new connection
+            }
             // verify this message sends a known sessionID and then create new connection
             return;
         }
     }
 
     LOG_WARN("Received I/O event for unknown fd: " << fd);
+}
+
+bool ReaderThread::accept(int serverFD, std::string& address)
+{
+    struct sockaddr_in addr;
+    socklen_t addrlen = sizeof(addr);
+    int fd = ::accept(serverFD, reinterpret_cast<struct sockaddr*>(&addr), &addrlen);
+    if (fd < 0)
+    {
+        LOG_WARN("Failed to accept new socket");
+        return false;
+    }
+
+    char ip[INET_ADDRSTRLEN + 1];
+    if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) 
+    {
+        LOG_WARN("Failed to parse incoming connection IP address");
+        close(fd);
+        return false;
+    }
+
+    address = std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));
+
+    struct epoll_event event;
+    event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+    event.data.fd = fd;
+
+    if (epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
+    {
+        LOG_WARN("Failed to register incoming connection with epoll");
+        close(fd);
+        return false;
+    }
+
+    return true;
 }
 
 void ReaderThread::stop()
@@ -178,7 +288,7 @@ void ReaderThread::stop()
 //               ReadBuffer               //
 ////////////////////////////////////////////
 
-std::vector<std::string> ReadBuffer::process(int fd, const std::string& text)
+std::vector<std::string> ReadBuffer::read(int fd)
 {
     std::vector<std::string> ret;
 
@@ -186,9 +296,59 @@ std::vector<std::string> ReadBuffer::process(int fd, const std::string& text)
     if (it == m_bufferMap.end())
         it = m_bufferMap.insert({fd, ""}).first;
     std::string& buffer = it->second;
-    buffer.append(text);
 
+    int bytes = recv(fd, m_buffer, sizeof(m_buffer), 0);
+    if (bytes <= 0)
+        ; // TODO error
+    buffer.append(m_buffer, bytes);
 
+    // parse all the messages we can
+    size_t ptr = 0, bodyLengthStart = 0;
+    int bodyLength = 0;
+    while (true)
+    {
+        // find beginning of message
+        ptr = buffer.find(BEGIN_STRING_TAG, ptr);
+        if (ptr == std::string::npos)
+            break;
+        if (ptr > 0)
+        {
+            LOG_WARN("Discarding text received in buffer: " << buffer.substr(0, ptr));
+            buffer.erase(0, ptr);
+            ptr = 0;
+        }
+        
+        // find start of bodylength tag
+        bodyLengthStart = buffer.find(BODY_LENGTH_TAG, ptr);
+        if (bodyLengthStart == std::string::npos)
+            break;
+
+        ptr = buffer.find(INTERNAL_SOH_CHAR, bodyLengthStart);
+        if (ptr == std::string::npos)
+            break;
+
+        try {
+            bodyLength = std::stoi(buffer.substr(bodyLengthStart + BODY_LENGTH_TAG.size(), ptr - bodyLengthStart + BODY_LENGTH_TAG.size()));
+            if (bodyLength < 0)
+                throw std::runtime_error("Negative body length");
+        } catch (...) {
+            LOG_WARN("Unable to parse message, bad body length: " << buffer);
+            // corrupted message, move up the buffer and hopefully splice it next round
+            buffer.erase(0, ptr + 1);
+            continue;
+        }
+            
+        // find the checksum
+        ptr = buffer.find(CHECKSUM_TAG, ptr);
+        if (ptr == std::string::npos)
+            break;
+        ptr = buffer.find(INTERNAL_SOH_CHAR, ptr);
+        if (ptr == std::string::npos)
+            break;
+        // completed message!
+        ret.push_back(buffer.substr(0, ptr + 1));
+        buffer.erase(0, ptr + 1);
+    }
 
     return ret;
 }
@@ -218,7 +378,14 @@ void WriterThread::process()
             if (buffer.m_buffer.empty())
                 continue;
 
-            // send
+            int sent = 0;
+            while (static_cast<size_t>(sent) < buffer.m_buffer.length())
+            {
+                int ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length(), 0);
+                if (ret < 0)
+                    ; // error
+                sent += ret;
+            }
 
             buffer.m_buffer.clear();
         }
@@ -229,5 +396,12 @@ void WriterThread::send(int fd, const std::string& msg)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_bufferMap[fd].m_queue.append(msg);
+    m_cv.notify_one();
+}
+
+void WriterThread::stop()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_running.store(false, std::memory_order_release);
     m_cv.notify_one();
 }

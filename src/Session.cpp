@@ -5,9 +5,9 @@
 #include <strings.h>
 
 Session::Session(SessionSettings settings)
-    : m_settings(settings)
-    , m_senderSeqNum(1)
+    : m_senderSeqNum(1)
     , m_targetSeqNum(1)
+    , m_settings(settings)
 {
     m_dictionary = DictionaryRegistry::instance().load(settings.getString(SessionSettings::FIX_DICTIONARY));
     

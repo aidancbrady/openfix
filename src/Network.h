@@ -14,6 +14,8 @@
 
 #include <oneapi/tbb/concurrent_queue.h>
 
+#define READ_BUF_SIZE 1024
+
 class ConnectionHandle
 {
 public:
@@ -37,7 +39,7 @@ struct MessageConsumer
     virtual void setConnection(std::shared_ptr<ConnectionHandle> connection) = 0;
 };
 
-class Acceptor
+struct Acceptor
 {
     // sendercompid -> session
     std::unordered_map<std::string, std::unique_ptr<MessageConsumer>> m_sessions;
@@ -46,17 +48,19 @@ class Acceptor
 class ReadBuffer
 {
 public:
-    std::vector<std::string> process(int fd, const std::string& text);
+    std::vector<std::string> read(int fd);
 
 private:
     std::unordered_map<int, std::string> m_bufferMap;
+    char m_buffer[READ_BUF_SIZE];
+
     CREATE_LOGGER("ReadBuffer");
 };
 
 class ReaderThread
 {
 public:
-    ReaderThread() : m_running(true) {}
+    ReaderThread(int epollFD) : m_running(true), m_epollFD(epollFD) {}
     
     void process();
     void process(int fd);
@@ -70,11 +74,15 @@ public:
         m_thread.join();
     }
 
-private:    
+private:
+    bool accept(int serverFD, std::string& address);
+
     std::atomic<bool> m_running;
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::thread m_thread;
+
+    int m_epollFD;
 
     tbb::concurrent_queue<int> m_readyFDs;
 
@@ -109,6 +117,13 @@ public:
 
     void send(int fd, const std::string& msg);
 
+    void stop();
+
+    void join()
+    {
+        m_thread.join();
+    }
+
 private:
     std::atomic<bool> m_running;
     std::mutex m_mutex;
@@ -140,10 +155,10 @@ private:
     int m_epollFD;
 
     size_t m_readerThreadCount;
-    std::vector<ReaderThread> m_readerThreads;
+    std::vector<std::unique_ptr<ReaderThread>> m_readerThreads;
 
     size_t m_writerThreadCount;
-    std::vector<WriterThread> m_writerThreads;
+    std::vector<std::unique_ptr<WriterThread>> m_writerThreads;
 
     std::atomic<bool> m_running;
 
