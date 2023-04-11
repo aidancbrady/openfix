@@ -4,7 +4,7 @@
 
 #include <unordered_set>
 
-const std::unordered_set<int> IGNORED_TAGS = {FIELDS::BeginString, FIELDS::BodyLength, FIELDS::CheckSum};
+const std::unordered_set<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
 
 std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags)
 {
@@ -25,8 +25,8 @@ std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags)
                     ostr << group;
         }
 
-        if (!skipIgnoredTags && fieldMap.has(FIELDS::CheckSum))
-            ostr << FIELDS::CheckSum << TAG_ASSIGNMENT_CHAR << fieldMap.getField(FIELDS::CheckSum) << INTERNAL_SOH_CHAR;
+        if (!skipIgnoredTags && fieldMap.has(FIELD::CheckSum))
+            ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << fieldMap.getField(FIELD::CheckSum) << INTERNAL_SOH_CHAR;
     }
 
     return ostr.str();
@@ -41,14 +41,14 @@ std::ostream& operator<<(std::ostream& ostr, const FieldMap& fieldMap)
 std::ostream& operator<<(std::ostream& ostr, const Message& msg)
 {
     std::ostringstream ret;
-    auto it = msg.m_header.getFields().find(FIELDS::BeginString);
+    auto it = msg.m_header.getFields().find(FIELD::BeginString);
     if (it != msg.m_header.getFields().end())
-        ret << FIELDS::BeginString << TAG_ASSIGNMENT_CHAR << it->second << INTERNAL_SOH_CHAR;
+        ret << FIELD::BeginString << TAG_ASSIGNMENT_CHAR << it->second << INTERNAL_SOH_CHAR;
     std::string body;
     body += printGroup(msg.m_header, true);
     body += printGroup(msg.m_body, true);
     body += printGroup(msg.m_trailer, true);
-    ret << FIELDS::BodyLength << TAG_ASSIGNMENT_CHAR << body.size() << INTERNAL_SOH_CHAR;
+    ret << FIELD::BodyLength << TAG_ASSIGNMENT_CHAR << body.size() << INTERNAL_SOH_CHAR;
     ret << body;
     body = ret.str();
 
@@ -62,6 +62,6 @@ std::ostream& operator<<(std::ostream& ostr, const Message& msg)
     checksumStr += std::to_string(checksum);
 
     ostr << body;
-    ostr << FIELDS::CheckSum << TAG_ASSIGNMENT_CHAR << checksumStr << INTERNAL_SOH_CHAR;
+    ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << checksumStr << INTERNAL_SOH_CHAR;
     return ostr;
 }

@@ -1,8 +1,10 @@
 #pragma once
 
 #include "Message.h"
-#include "Log.h"
 #include "Config.h"
+
+#include <openfix/Log.h>
+#include <openfix/FileUtils.h>
 
 #include <atomic>
 #include <mutex>
@@ -36,24 +38,6 @@ protected:
     LoggerHandle createHandle(LoggerFunction evtLogger, LoggerFunction msgLogger) const;
 };
 
-struct LoggerInstance
-{
-    explicit LoggerInstance(std::string path) : m_path(std::move(path)) 
-    {
-        m_buffer.reserve(1024);
-        m_queue.reserve(1024);
-    }
-
-    std::string m_buffer;
-    std::string m_queue;
-
-    std::ofstream m_stream;
-
-    std::mutex m_mutex;
-
-    std::string m_path;
-};
-
 class LoggerHandle
 {
 public:
@@ -81,7 +65,7 @@ private:
 class FileLogger : public IFIXLogger
 {
 public:
-    FileLogger();
+    FileLogger() = default;
     ~FileLogger();
 
     void start() override;
@@ -90,16 +74,7 @@ public:
     LoggerHandle createLogger(const SessionSettings& settings) override;
     
 private:
-    void process();
-
-    std::thread m_thread;
-
-    std::vector<std::unique_ptr<LoggerInstance>> m_instances;
-
-    std::condition_variable m_cv;
-    std::mutex m_mutex;
-
-    std::atomic<bool> m_enabled;
+    FileWriter m_writer;
 
     CREATE_LOGGER("FileLogger");
 };

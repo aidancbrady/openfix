@@ -13,14 +13,17 @@
 #include <arpa/inet.h>
 
 #include <unistd.h>
+#include <netdb.h>
+#include <string.h>
 
 #define EVENT_BUF_SIZE 256
+#define ACCEPTOR_BACKLOG 16
 
-const std::string BEGIN_STRING_TAG = std::to_string(FIELDS::BeginString) + std::to_string(TAG_ASSIGNMENT_CHAR);
-const std::string BODY_LENGTH_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELDS::BodyLength) + std::to_string(TAG_ASSIGNMENT_CHAR);
-const std::string SENDER_COMP_ID_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELDS::SenderCompID) + std::to_string(TAG_ASSIGNMENT_CHAR);
-const std::string SENDER_SUB_ID_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELDS::SenderSubID) + std::to_string(TAG_ASSIGNMENT_CHAR);
-const std::string CHECKSUM_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELDS::CheckSum) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string BEGIN_STRING_TAG = std::to_string(FIELD::BeginString) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string BODY_LENGTH_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELD::BodyLength) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string SENDER_COMP_ID_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELD::SenderCompID) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string SENDER_SUB_ID_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELD::SenderSubID) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string CHECKSUM_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELD::CheckSum) + std::to_string(TAG_ASSIGNMENT_CHAR);
 
 Network::Network() : m_epollFD(-1), m_running(false)
 {
@@ -33,31 +36,14 @@ void Network::start()
     m_epollFD = epoll_create1(0);
     if (m_epollFD == -1)
     {
-        if (errno == EMFILE)
-        {
-            throw std::runtime_error("Couldn't initialize epoll, process FD limit reached");
-        }
-        else if (errno == ENFILE)
-        {
-            throw std::runtime_error("Couldn't initialize epoll, system FD limit reached");
-        }
-        else if (errno == ENOMEM)
-        {
-            throw std::runtime_error("Couldn't initialize epoll, system memory limit reached");
-        }
-
-        throw std::runtime_error("Couldn't initialize epoll, unknown error");
+        throw std::runtime_error("Couldn't initialize epoll: " + std::string(strerror(errno)));
     }
 
     for (size_t i = 0; i < m_readerThreadCount; ++i)
-    {
-        m_readerThreads.push_back(std::make_unique<ReaderThread>(m_epollFD));
-    }
+        m_readerThreads.push_back(std::make_unique<ReaderThread>(*this));
 
     for (size_t i = 0; i < m_writerThreadCount; ++i)
-    {
-        m_writerThreads.push_back(std::make_unique<WriterThread>());
-    }
+        m_writerThreads.push_back(std::make_unique<WriterThread>(*this));
 
     run();
 }
@@ -75,7 +61,7 @@ void Network::stop()
     for (auto& thread : m_readerThreads)
         thread->join();
     for (auto& thread : m_writerThreads)
-        thread->stop();
+        thread->join();
 
     m_readerThreads.clear();
     m_writerThreads.clear();
@@ -84,20 +70,104 @@ void Network::stop()
     close(m_epollFD);
 }
 
-void Network::connect(const SessionSettings& settings)
+bool Network::connect(const std::string& hostname, int port)
 {
+    int fd = 0;
 
+    struct addrinfo hints;
+    struct addrinfo* ret;
+
+    hints.ai_family = AF_UNSPEC; // allow ipv6
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    int err = getaddrinfo(hostname.c_str(), std::to_string(port).c_str(), &hints, &ret);
+    if (err != 0)
+    {
+        LOG_ERROR("Error in hostname resolution: " << gai_strerror(err));
+        return false;
+    }
+
+    for (struct addrinfo* addr = ret; addr != nullptr; addr = addr->ai_next)
+    {
+        fd = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
+        if (fd == -1)
+        {
+            err = errno;
+            continue;
+        }
+
+        if (::connect(fd, addr->ai_addr, addr->ai_addrlen) < 0)
+            break;
+
+        err = errno;
+
+        close(fd);
+        fd = -1;
+    }
+
+    freeaddrinfo(ret);
+
+    if (!addClient(fd))
+    {
+        close(fd);
+        return false;
+    }
+
+    if (!m_readerThreads[fd % m_readerThreadCount].addClient(fd))
+    {
+        close(fd);
+        return false;
+    }
+}
+
+bool Network::addAcceptor(const SessionSettings& settings)
+{
+    int port = settings.getLong(SessionSettings::ACCEPT_PORT);
+    int fd = 0;
+
+    if ((fd = socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP)) < 0)
+    {
+        LOG_ERROR("Unable to create socket: " << strerror(errno));
+        return false;
+    }
+
+    struct sockaddr_in addr;
+    addr.sin_family = AF_UNSPEC; // support ipv4
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(fd, (const struct sockaddr *) &addr, sizeof(addr)) < 0) 
+    {
+        LOG_ERROR("Couldn't bind to port: " << strerror(errno));
+        close(fd);
+        return false;
+    }
+
+    if (listen(fd, ACCEPTOR_BACKLOG) < 0) 
+    {
+        LOG_ERROR("Couldn't listen to accept port: " << strerror(errno));
+        close(fd);
+        return false;
+    }
+
+    struct epoll_event event;
+    event.events = EPOLLIN | EPOLLET;
+    event.data.fd = fd;
+
+    if (epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) 
+    {
+        LOG_ERROR("Couldn't add acceptor socket to epoll wait list: " << strerror(errno));
+        close(fd);
+        return false;
+    }
+
+    m_readerThreads[fd % m_readerThreadCount]->addAcceptor(settings, fd);
 }
 
 void Network::removeAcceptor(const SessionSettings& settings)
 {
 
-}
-
-ConnectionHandle Network::createHandle(int fd)
-{
-    ConnectionHandle ret{fd};
-    return ret;
 }
 
 void Network::run()
@@ -111,11 +181,35 @@ void Network::run()
     {
         while ((numEvents = epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) > 0)
         {
-            for (int i = 0; i < numEvents; i++) {
+            for (int i = 0; i < numEvents; i++) 
+            {
                 int fd = events[i].data.fd;
-                m_readerThreads[fd % m_readerThreadCount]->queue(fd);
+
+                if (events[i].events & EPOLLIN)
+                {
+                    // data received
+                    m_readerThreads[fd % m_readerThreadCount]->queue(fd);
+                }
+                else if (events[i].events & EPOLLRDHUP)
+                {
+                    // connection hangup
+                    m_readerThreads[fd % m_readerThreadCount]->disconnect(fd);
+                }
             }
         }
+    }
+}
+
+bool Network::addClient(int fd)
+{
+    struct epoll_event event;
+    event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+    event.data.fd = fd;
+
+    if (epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
+    {
+        LOG_WARN("Failed to register connection with epoll");
+        return false;
     }
 }
 
@@ -130,6 +224,25 @@ void ReaderThread::queue(int fd)
     std::lock_guard<std::mutex> lock(m_mutex);
     m_readyFDs.push(fd);
     m_cv.notify_one();
+}
+
+void ReaderThread::disconnect(int fd)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_buffer.clear(fd);
+    auto it = m_connections.find(fd);
+    if (m_connections.find(fd) != m_connections.end())
+    {
+        it->second->setConnection(nullptr);
+        m_connections.erase(fd);
+        return;
+    }
+    
+    if (m_unknownConnections.find(fd) != m_unknownConnections.end())
+    {
+        m_unknownConnections.erase(fd);
+        return;
+    }
 }
 
 void ReaderThread::process()
@@ -160,6 +273,9 @@ void ReaderThread::process(int fd)
         auto it = m_connections.find(fd);
         if (it != m_connections.end())
         {
+            auto msgs = m_buffer.read(fd);
+            for (const auto& msg : msgs)
+                it->second->processMessage(msg);
             return;
         }
     }
@@ -214,17 +330,19 @@ void ReaderThread::process(int fd)
                     cpty.append(":*");
                 }
 
-                auto acceptorIt = it->second->m_sessions.find(ptr);
-                if (acceptorIt == it->second->m_sessions.end())
+                auto consumerIt = it->second->m_sessions.find(cpty);
+                if (consumerIt == it->second->m_sessions.end())
                 {
-                    LOG_ERROR("Received connection from unknown counterparty: " cpty);
+                    LOG_ERROR("Received connection from unknown counterparty: " << cpty);
                     close(fd);
                     return;
                 }
 
                 // create new connection
+                consumerIt->second->setConnection(createHandle(fd));
+                m_connections[fd] = consumerIt->second;
             }
-            // verify this message sends a known sessionID and then create new connection
+
             return;
         }
     }
@@ -239,27 +357,22 @@ bool ReaderThread::accept(int serverFD, std::string& address)
     int fd = ::accept(serverFD, reinterpret_cast<struct sockaddr*>(&addr), &addrlen);
     if (fd < 0)
     {
-        LOG_WARN("Failed to accept new socket");
+        LOG_WARN("Failed to accept new socket: " << strerror(errno));
         return false;
     }
 
     char ip[INET_ADDRSTRLEN + 1];
     if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) 
     {
-        LOG_WARN("Failed to parse incoming connection IP address");
+        LOG_WARN("Failed to parse incoming connection IP address: " << strerror(errno));
         close(fd);
         return false;
     }
 
     address = std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));
 
-    struct epoll_event event;
-    event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
-    event.data.fd = fd;
-
-    if (epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
+    if (!m_network.addClient(fd))
     {
-        LOG_WARN("Failed to register incoming connection with epoll");
         close(fd);
         return false;
     }
@@ -282,6 +395,29 @@ void ReaderThread::stop()
     // close acceptor sockets
     for (const auto& [k, _] : m_acceptorSockets)
         close(k);
+}
+
+std::shared_ptr<ConnectionHandle> ReaderThread::createHandle(int fd)
+{
+    auto disconnect = [&]() {
+        ReaderThread::disconnect(fd);
+    };
+
+    auto send = [&](const std::string& msg) {
+        m_network.m_writerThreads[fd % m_network.m_writerThreadCount]->send(fd, msg);
+    };
+
+    return std::make_unique<ConnectionHandle>(fd, disconnect, send);
+}
+
+void ReaderThread::addConnection(const MessageConsumer& consumer, int fd)
+{
+
+}
+
+void ReaderThread::addAcceptor(const SessionSettings& settings, int fd)
+{
+    
 }
 
 ////////////////////////////////////////////

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "Log.h"
+#include <openfix/Log.h>
+
 #include "Config.h"
 
 #include <string>
@@ -15,19 +16,42 @@
 #include <oneapi/tbb/concurrent_queue.h>
 
 #define READ_BUF_SIZE 1024
+#define WRITE_BUF_SIZE 1024
 
 class ConnectionHandle
 {
 public:
-    explicit ConnectionHandle(int fd) : m_fd(fd) {}
+    using DisconnectFunction = std::function<void()>;
+    using SendFunction = std::function<void(const std::string&)>;
+
+    ConnectionHandle(int fd, DisconnectFunction disconnect, SendFunction send) 
+        : m_fd(fd)
+        , m_disconnect(std::move(disconnect))
+        , m_send(std::move(send))
+    {}
 
     // will not remove this session from connection map, just 'kicks' the socket connection
-    void disconnect();
+    void disconnect()
+    {
+        m_disconnect();
+    }
 
-    void send(const std::string& msg);
+    void send(const std::string& msg)
+    {
+        m_send(msg);
+    }
+
+    // extremely dangerous, I might remove this
+    size_t getFD()
+    {
+        return m_fd;
+    }
 
 private:
     int m_fd;
+
+    DisconnectFunction m_disconnect;
+    SendFunction m_send;
 };
 
 struct MessageConsumer
@@ -42,13 +66,20 @@ struct MessageConsumer
 struct Acceptor
 {
     // sendercompid -> session
-    std::unordered_map<std::string, std::unique_ptr<MessageConsumer>> m_sessions;
+    std::unordered_map<std::string, std::shared_ptr<MessageConsumer>> m_sessions;
 };
+
+class Network;
 
 class ReadBuffer
 {
 public:
     std::vector<std::string> read(int fd);
+
+    void clear(int fd)
+    {
+        m_bufferMap.erase(fd);
+    }
 
 private:
     std::unordered_map<int, std::string> m_bufferMap;
@@ -60,12 +91,17 @@ private:
 class ReaderThread
 {
 public:
-    ReaderThread(int epollFD) : m_running(true), m_epollFD(epollFD) {}
+    ReaderThread(Network& network) : m_running(true), m_network(network) {}
     
     void process();
     void process(int fd);
 
     void queue(int fd);
+    void disconnect(int fd);
+
+    void addConnection(const MessageConsumer& consumer, int fd);
+    void addAcceptor(const SessionSettings& settings, int fd);
+    void removeAcceptor(const SessionSettings& settings);
 
     void stop();
 
@@ -76,13 +112,12 @@ public:
 
 private:
     bool accept(int serverFD, std::string& address);
+    std::shared_ptr<ConnectionHandle> createHandle(int fd);
 
     std::atomic<bool> m_running;
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::thread m_thread;
-
-    int m_epollFD;
 
     tbb::concurrent_queue<int> m_readyFDs;
 
@@ -93,7 +128,9 @@ private:
     // fd -> unassigned connection from acceptor socket
     std::unordered_map<int, std::shared_ptr<Acceptor>> m_unknownConnections;
     // fd -> assigned connection
-    std::unordered_map<int, std::shared_ptr<ConnectionHandle>> m_connections;
+    std::unordered_map<int, std::shared_ptr<MessageConsumer>> m_connections;
+
+    Network& m_network;
 
     CREATE_LOGGER("ReaderThread");
 };
@@ -102,8 +139,8 @@ struct WriteBuffer
 {
     WriteBuffer()
     {
-        m_queue.reserve(1024);
-        m_buffer.reserve(1024);
+        m_queue.reserve(WRITE_BUF_SIZE);
+        m_buffer.reserve(WRITE_BUF_SIZE);
     }
 
     std::string m_queue;
@@ -113,6 +150,8 @@ struct WriteBuffer
 class WriterThread
 {
 public:
+    WriterThread(Network& network) : m_running(true), m_network(network) {}
+
     void process();
 
     void send(int fd, const std::string& msg);
@@ -132,6 +171,8 @@ private:
     
     std::unordered_map<int, WriteBuffer> m_bufferMap;
 
+    Network& m_network;
+
     CREATE_LOGGER("WriterThread");
 };
 
@@ -143,14 +184,18 @@ public:
     void start();
     void stop();
 
+    bool connect(const MessageConsumer& consumer, const std::string& hostname, int port);
+
+    bool addAcceptor(const SessionSettings& settings);
+    void removeAcceptor(const SessionSettings& settings);
+
 private:
     void run();
 
-    void process(int fd);
-    ConnectionHandle createHandle(int fd);
+    bool addClient(int fd);
 
-    // port -> acceptor
-    std::unordered_map<int, std::shared_ptr<Acceptor>> m_acceptors;
+    // acceptor port -> fd
+    std::unordered_map<int, int> m_acceptors;
 
     int m_epollFD;
 
@@ -163,4 +208,7 @@ private:
     std::atomic<bool> m_running;
 
     CREATE_LOGGER("Network");
+
+    friend class ReaderThread;
+    friend class WriterThread;
 };

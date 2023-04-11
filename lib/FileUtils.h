@@ -1,0 +1,72 @@
+#pragma once
+
+#include "Log.h"
+
+#include <string>
+#include <fstream>
+#include <mutex>
+#include <thread>
+#include <condition_variable>
+#include <atomic>
+#include <unordered_map>
+
+// 1KB write buffer
+#define BUF_SIZE 1024
+
+class FileWriter;
+
+class WriterInstance
+{
+public:
+    explicit WriterInstance(std::string path, std::condition_variable& cv) 
+        : m_path(std::move(path))
+        , m_cv(cv)
+    {
+        m_buffer.reserve(BUF_SIZE);
+        m_queue.reserve(BUF_SIZE);
+    }
+
+    void write(const std::string& text);
+
+private:
+    std::string m_buffer;
+    std::string m_queue;
+
+    std::ofstream m_stream;
+
+    std::mutex m_mutex;
+
+    std::string m_path;
+
+    std::condition_variable& m_cv;
+
+    friend class FileWriter;
+};
+
+class FileWriter
+{
+public:
+    FileWriter();
+    ~FileWriter();
+
+    void start();
+    void stop();
+
+    std::unique_ptr<WriterInstance>& createInstance(const std::string& fileName);
+
+private:
+    void process();
+
+    std::thread m_thread;
+
+    std::unordered_map<std::string, std::unique_ptr<WriterInstance>> m_instances;
+
+    std::condition_variable m_cv;
+    std::mutex m_mutex;
+
+    std::atomic<bool> m_enabled;
+
+    CREATE_LOGGER("FileWriter");
+};
+
+#undef BUF_SIZE

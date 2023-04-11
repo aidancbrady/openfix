@@ -1,6 +1,6 @@
 #pragma once
 
-namespace FIELDS
+namespace FIELD
 {
     inline constexpr int BeginString = 8;
     inline constexpr int BodyLength = 9;

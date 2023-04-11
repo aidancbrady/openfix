@@ -129,7 +129,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                     }
                 }
 
-                if (tag == FIELDS::BodyLength)
+                if (tag == FIELD::BodyLength)
                     bodyLengthStart = i + 1;
                 
                 fieldMap.setField(tag, std::move(val));
@@ -237,7 +237,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 auto it = m_bodySpecs.end();
                 std::string msgType;
                 try {
-                    msgType = ret.getHeader().getField(FIELDS::MsgType);
+                    msgType = ret.getHeader().getField(FIELD::MsgType);
                     it = m_bodySpecs.find(msgType);
                 } catch(...) {
                     TRY_LOG_THROW("Unknown message: " << msgType);
@@ -297,11 +297,11 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 fail = true;
             }
 
-            if (tagCount == 0 && tag != FIELDS::BeginString)
+            if (tagCount == 0 && tag != FIELD::BeginString)
                 TRY_LOG_THROW("First field is not BeginString");
-            if (tagCount == 1 && tag != FIELDS::BodyLength)
+            if (tagCount == 1 && tag != FIELD::BodyLength)
                 TRY_LOG_THROW("Second field is not BodyLength");
-            if (tagCount == 2 && tag != FIELDS::MsgType)
+            if (tagCount == 2 && tag != FIELD::MsgType)
                 TRY_LOG_THROW("Third field is not MsgType");
                 
             ++tagCount;
@@ -359,7 +359,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
         // verify bodylength
         auto expectedLength = text.size() - bodyLengthStart - 7;
         try {
-            auto bodyLength = static_cast<unsigned long>(std::atol(ret.getHeader().getField(FIELDS::BodyLength).c_str()));
+            auto bodyLength = static_cast<unsigned long>(std::atol(ret.getHeader().getField(FIELD::BodyLength).c_str()));
             if (expectedLength != bodyLength)
                 throw std::exception();
         } catch (...) {
@@ -367,7 +367,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
         }
 
         // verify checksum
-        if (!ret.getTrailer().has(FIELDS::CheckSum))
+        if (!ret.getTrailer().has(FIELD::CheckSum))
         {
             TRY_LOG_THROW("Footer missing CheckSum");
         }
@@ -379,9 +379,9 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             for (int tmp = checksum; tmp < 100; checksumStr += "0", tmp *= 10);
             checksumStr += std::to_string(checksum);
 
-            if (tag != FIELDS::CheckSum)
+            if (tag != FIELD::CheckSum)
                 TRY_LOG_THROW("Message didn't end in checksum");
-            const auto& checksumRet = ret.getTrailer().getField(FIELDS::CheckSum);
+            const auto& checksumRet = ret.getTrailer().getField(FIELD::CheckSum);
 
             if (checksumRet != checksumStr)
             {
@@ -391,7 +391,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     }
 
     // remove checksum
-    ret.getTrailer().removeField(FIELDS::CheckSum);
+    ret.getTrailer().removeField(FIELD::CheckSum);
 
     return ret;
 }

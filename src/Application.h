@@ -2,6 +2,7 @@
 
 #include "FIXLogger.h"
 #include "FIXStore.h"
+#include "lib/Dispatcher.h"
 
 #include <memory>
 #include <thread>

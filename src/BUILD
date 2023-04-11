@@ -5,9 +5,10 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "openfix",
     include_prefix = "openfix",
-    hdrs = glob(["*.h"]),
-    srcs = glob(["*.cpp"]),
+    hdrs = glob(["*.h", "lib/*.h"]),
+    srcs = glob(["*.cpp", "lib/*.cpp"]),
     deps = [
+        "//lib:openfix_lib",
         "@pugixml//:pugixml",
         "@oneTBB//:tbb"
     ]

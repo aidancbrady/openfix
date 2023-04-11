@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Log.h"
+#include <openfix/Log.h>
 
 #include <string>
 #include <vector>
@@ -185,4 +185,6 @@ struct SessionSettings : Config<SessionSettings>
 
     static inline ConfigItem<std::string> START_TIME = createString("StartTime");
     static inline ConfigItem<std::string> STOP_TIME = createString("StopTime");
+
+    static inline ConfigItem<long> ACCEPT_PORT = createLong("AcceptPort");
 };

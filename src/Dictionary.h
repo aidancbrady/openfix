@@ -2,7 +2,8 @@
 
 #include "Message.h"
 #include "Config.h"
-#include "Log.h"
+
+#include <openfix/Log.h>
 
 #include <string>
 #include <memory>

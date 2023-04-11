@@ -13,6 +13,7 @@ Application::~Application() {}
 void Application::start()
 {
     m_logger->start();
+    m_store->start();
 
     m_updateThread = std::thread([&]() {
         runUpdate();
@@ -23,6 +24,7 @@ void Application::start()
 void Application::stop()
 {
     m_logger->stop();
+    m_store->stop();
 }
 
 void Application::runUpdate()
