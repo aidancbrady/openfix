@@ -523,15 +523,21 @@ void WriterThread::process()
                 sent += ret;
             }
 
+            // process callbacks
+            SendCallback callback;
+            while (buffer.m_sendCallbacks.try_pop(callback))
+                callback();
+
             buffer.m_buffer.clear();
         }
     }
 }
 
-void WriterThread::send(int fd, const std::string& msg)
+void WriterThread::send(int fd, const MsgPacket& msg)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_bufferMap[fd].m_queue.append(msg);
+    m_bufferMap[fd].m_queue.append(msg.m_msg);
+    m_bufferMap[fd].m_sendCallbacks.push(std::move(msg.m_callback));
     m_cv.notify_one();
 }
 

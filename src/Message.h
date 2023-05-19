@@ -72,6 +72,14 @@ public:
         throw FieldNotFound(tag);
     }
 
+    bool tryGetBool(int tag) const
+    {
+        auto it = m_fields.find(tag);
+        if (it == m_fields.end())
+            return false;
+        return it->second == "Y";
+    }
+
     bool removeField(int tag)
     {
         return m_fields.erase(tag);

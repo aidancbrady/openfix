@@ -25,6 +25,7 @@ enum class SessionState
     LOGON,
     READY,
     TEST_REQUEST,
+    KILLING,
     LOGOUT
 };
 
@@ -75,7 +76,7 @@ public:
 
     void runUpdate();
 
-    void send(Message& msg);
+    void send(Message& msg, SendCallback callback = SendCallback());
 
 private:
     bool load();

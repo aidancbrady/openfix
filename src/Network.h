@@ -18,11 +18,20 @@
 #define READ_BUF_SIZE 1024
 #define WRITE_BUF_SIZE 1024
 
+using SendCallback = std::function<void()>;
+struct MsgPacket
+{
+    MsgPacket(std::string msg) : m_msg(std::move(msg)) {}
+
+    std::string m_msg;
+    SendCallback m_callback;
+};
+
 class ConnectionHandle
 {
 public:
     using DisconnectFunction = std::function<void()>;
-    using SendFunction = std::function<void(const std::string&)>;
+    using SendFunction = std::function<void(const MsgPacket&)>;
 
     ConnectionHandle(int fd, DisconnectFunction disconnect, SendFunction send) 
         : m_fd(fd)
@@ -36,7 +45,7 @@ public:
         m_disconnect();
     }
 
-    void send(const std::string& msg)
+    void send(const MsgPacket& msg)
     {
         m_send(msg);
     }
@@ -145,6 +154,8 @@ struct WriteBuffer
 
     std::string m_queue;
     std::string m_buffer;
+
+    tbb::concurrent_queue<SendCallback> m_sendCallbacks;
 };
 
 class WriterThread
@@ -154,7 +165,7 @@ public:
 
     void process();
 
-    void send(int fd, const std::string& msg);
+    void send(int fd, const MsgPacket& msg);
 
     void stop();
 

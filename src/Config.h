@@ -207,6 +207,8 @@ struct SessionSettings : Config<SessionSettings>
     static inline ConfigItem<std::string> SENDER_COMP_ID = createString("SenderCompID");
     static inline ConfigItem<std::string> TARGET_COMP_ID = createString("TargetCompID");
 
+    static inline ConfigItem<bool> IS_TEST = createBool("TestSession", false);
+
     static inline ConfigItem<std::string> FIX_DICTIONARY = createString("FIXDictionary");
 
     static inline ConfigItem<bool> RELAXED_PARSING = createBool("RelaxedParsing");
@@ -223,4 +225,5 @@ struct SessionSettings : Config<SessionSettings>
     static inline ConfigItem<long> RECONNECT_INTERVAL = createLong("ReconnectInterval", 10L);
 
     static inline ConfigItem<double> TEST_REQUEST_THRESHOLD = createDouble("TestRequestThreshold", 2.0);
+    static inline ConfigItem<long> SENDING_TIME_THRESHOLD = createLong("SendingTimeThreshold", 10L);
 };

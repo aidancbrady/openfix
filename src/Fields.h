@@ -7,6 +7,7 @@ namespace FIELD
     inline constexpr int BodyLength = 9;
     inline constexpr int CheckSum = 10;
     inline constexpr int EndSeqNo = 16;
+    inline constexpr int MsgSeqNum = 34;
     inline constexpr int MsgType = 35;
     inline constexpr int NewSeqNo = 36;
     inline constexpr int PosDupFlag = 43;
@@ -27,5 +28,22 @@ namespace FIELD
     inline constexpr int RefTagID = 371;
     inline constexpr int RefMsgType = 372;
     inline constexpr int SessionRejectReason = 373;
+    inline constexpr int TestMessageIndicator = 464;
     inline constexpr int NextExpectedMsgSeqNum = 789;
+
+    enum class SessionRejectReason
+    {
+        InvalidTagNum = 0,
+        RequiredTagMissing = 1,
+        TagNotDefinedForMsg = 2,
+        UndefinedTag = 3,
+        TagWithoutValue = 4,
+        IncorrectValueForTag = 5,
+        IncorrectFormatForValue = 6,
+        DecryptionProblem = 7,
+        SignatureProblem = 8,
+        CompIDProblem = 9,
+        SendingTimeProblem = 10,
+        InvalidMsgType = 11
+    };
 }
