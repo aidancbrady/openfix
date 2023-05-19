@@ -20,7 +20,11 @@ template<typename Class>
 class Config
 {
 public:
-    Config() : m_stringValues(defaults().m_strings), m_longValues(defaults().m_longs), m_boolValues(defaults().m_bools)
+    Config() 
+        : m_stringValues(defaults().m_strings)
+        , m_longValues(defaults().m_longs)
+        , m_boolValues(defaults().m_bools)
+        , m_doubleValues(defaults().m_doubles)
     {}
 
     template<typename Type>
@@ -56,6 +60,16 @@ public:
         return m_boolValues[item.index];
     }
 
+    void setDouble(const ConfigItem<double>& item, double value)
+    {
+        m_doubleValues[item.index] = value;
+    }
+
+    double getDouble(const ConfigItem<double>& item) const
+    {
+        return m_doubleValues[item.index];
+    }
+
     void load(const std::unordered_map<std::string, std::string>& settings)
     {
         for (const auto& [key, val] : settings)
@@ -70,9 +84,11 @@ public:
             if (it->second.first == typeid(std::string))
                 m_stringValues[it->second.second] = val;
             else if (it->second.first == typeid(long))
-                m_longValues[it->second.second] = std::atol(val);
+                m_longValues[it->second.second] = std::stol(val);
             else if (it->second.first == typeid(bool))
                 m_longValues = val == "1" || strcasecmp(val.c_str(), "Y") == 0 || strcasecmp(val.c_str(), "true") == 0;
+            else if (it->second.first == typeid(double))
+                m_doubleValues = std::stod(val);
         }
     }
 
@@ -98,6 +114,13 @@ protected:
         return {name, defaultValue, defaults().m_bools.size() - 1};
     }
 
+    static inline ConfigItem<bool> createDouble(std::string name, double defaultValue = 0.0)
+    {
+        defaults().m_doubles.push_back(defaultValue);
+        defaults().m_fields.insert({name, {typeid(double), defaults().m_doubles.size() - 1}});
+        return {name, defaultValue, defaults().m_doubles.size() - 1};
+    }
+
 private:
     struct Defaults
     {
@@ -106,6 +129,7 @@ private:
         std::vector<std::string> m_strings;
         std::vector<long> m_longs;
         std::vector<bool> m_bools;
+        std::vector<double> m_doubles;
     };
 
     static Defaults& defaults()
@@ -117,6 +141,7 @@ private:
     std::vector<std::string> m_stringValues;
     std::vector<long> m_longValues;
     std::vector<bool> m_boolValues;
+    std::vector<double> m_doubleValues;
 
     CREATE_LOGGER("Config");
 };
@@ -138,6 +163,11 @@ public:
     static bool getBool(const BaseConfigItem<Class, bool>& item)
     {
         return instance().getBool(item);
+    }
+
+    static double getDouble(const BaseConfigItem<Class, double>& item)
+    {
+        return instance().getDouble(item);
     }
 
     static void load(const std::unordered_map<std::string, std::string>& settings)
@@ -183,8 +213,14 @@ struct SessionSettings : Config<SessionSettings>
     static inline ConfigItem<bool> LOUD_PARSING = createBool("LoudParsing", true);
     static inline ConfigItem<bool> VALIDATE_REQUIRED_FIELDS = createBool("ValidateRequiredFields");
 
-    static inline ConfigItem<std::string> START_TIME = createString("StartTime");
-    static inline ConfigItem<std::string> STOP_TIME = createString("StopTime");
+    static inline ConfigItem<std::string> START_TIME = createString("StartTime", "00:00:00");
+    static inline ConfigItem<std::string> STOP_TIME = createString("StopTime", "00:00:00");
 
     static inline ConfigItem<long> ACCEPT_PORT = createLong("AcceptPort");
+
+    static inline ConfigItem<long> HEARTBEAT_INTERVAL = createLong("HeartbeatInterval", 10L);
+    static inline ConfigItem<long> LOGON_INTERVAL = createLong("LogonInterval", 10L);
+    static inline ConfigItem<long> RECONNECT_INTERVAL = createLong("ReconnectInterval", 10L);
+
+    static inline ConfigItem<double> TEST_REQUEST_THRESHOLD = createDouble("TestRequestThreshold", 2.0);
 };

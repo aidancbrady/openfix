@@ -16,28 +16,34 @@ struct SessionData
     int m_targetSeqNum;
 };
 
-using StoreFunction = std::function<void(const std::string&)>;
+using WriteFunction = std::function<void(const std::string&)>;
 
 class IFIXStore;
 
 class StoreHandle
 {
 public:
-    void store(const std::string& msg)
-    {
-        m_storeFunc(msg);
-    }
+    void store(const std::string& msg, int seqnum);
+    void setSenderSeqNum(int num);
+    void setTargetSeqNum(int num);
 
     SessionData load();
 
 private:
-    StoreHandle(const SessionSettings& settings, StoreFunction storeFunc)
+    StoreHandle(const SessionSettings& settings, WriteFunction writeFunc, std::string path)
         : m_settings(settings)
-        , m_storeFunc(std::move(storeFunc))
+        , m_writeFunc(std::move(writeFunc))
+        , m_path(std::move(path))
     {}
 
+    void write(const std::string& msg)
+    {
+        m_writeFunc(msg);
+    }
+
     const SessionSettings& m_settings;
-    StoreFunction m_storeFunc;
+    WriteFunction m_writeFunc;
+    std::string m_path;
 
     friend class IFIXStore;
 };
@@ -53,9 +59,9 @@ public:
     virtual StoreHandle createStore(const SessionSettings& settings) = 0;
 
 protected:
-    StoreHandle createHandle(const SessionSettings& settings, StoreFunction storeFunc) const
+    StoreHandle createHandle(const SessionSettings& settings, StoreFunction storeFunc, std::string path) const
     {
-        return {settings, std::move(storeFunc)};
+        return {settings, std::move(storeFunc), std::move(path)};
     }
 };
 

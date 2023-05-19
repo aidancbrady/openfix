@@ -2,11 +2,13 @@
 
 #include "FIXLogger.h"
 #include "FIXStore.h"
+#include "Session.h"
 #include "lib/Dispatcher.h"
 
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <unordered_map>
 
 struct ApplicationDelegate
 {
@@ -24,6 +26,19 @@ public:
         m_delegate = delegate;
     }
 
+    void createSession(const std::string& sessionName, const SessionSettings& settings)
+    {
+
+    }
+
+    std::shared_ptr<Session> getSession(const std::string& sessionName)
+    {
+        auto it = m_sessionMap.find(sessionName);
+        if (it == m_sessionMap.end())
+            return nullptr;
+        return it->second;
+    }
+
     void start();
     void stop();
 
@@ -36,6 +51,8 @@ private:
     std::atomic<bool> m_running;
 
     std::thread m_updateThread;
+
+    std::unordered_map<std::string, std::shared_ptr<Session>> m_sessionMap;
 
     std::weak_ptr<ApplicationDelegate> m_delegate;
 };

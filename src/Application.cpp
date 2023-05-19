@@ -29,5 +29,6 @@ void Application::stop()
 
 void Application::runUpdate()
 {
-
+    for (auto& [_, session] : m_sessionMap)
+        session->runUpdate();
 }

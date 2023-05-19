@@ -14,6 +14,12 @@ public:
 
     virtual void cache(const Message& msg) = 0;
 
+    virtual void setSenderSeqNum(int num) = 0;
+    virtual void setTargetSeqNum(int num) = 0;
+
+    virtual int getSenderSeqNum() = 0;
+    virtual int getTargetSeqNum() = 0;
+
     virtual void load(const SessionData& data) = 0;
 };
 
@@ -23,6 +29,12 @@ public:
     MemoryCache(const SessionSettings& settings, std::shared_ptr<Dictionary> dictionary);
 
     void cache(const Message& msg) override;
+
+    void setSenderSeqNum(int num) override;
+    void setTargetSeqNum(int num) override;
+
+    int getSenderSeqNum() override;
+    int getTargetSeqNum() override;
 
     void load(const SessionData& data) override;
     
@@ -34,6 +46,8 @@ private:
     int m_targetSeqNum;
     
     std::map<int, Message> m_messages;
+
+    std::mutex m_seqNumMutex;
 
     CREATE_LOGGER("MemoryCache");
 };

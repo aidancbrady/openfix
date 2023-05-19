@@ -26,3 +26,4 @@ struct FieldNotFound : public std::exception
 CREATE_STRING_EXCEPTION(MessageParsingError)
 CREATE_STRING_EXCEPTION(DictionaryParsingError)
 CREATE_STRING_EXCEPTION(MisconfiguredSessionError);
+CREATE_STRING_EXCEPTION(FileStoreLoadError);

@@ -21,3 +21,27 @@ void MemoryCache::load(const SessionData& data)
         m_messages.emplace(idx, m_dictionary->parse(m_settings, msg));
     }
 }
+
+int MemoryCache::getSenderSeqNum()
+{
+    std::lock_guard<std::mutex> lock(m_seqNumMutex);
+    return m_senderSeqNum;
+}
+
+int MemoryCache::getTargetSeqNum()
+{
+    std::lock_guard<std::mutex> lock(m_seqNumMutex);
+    return m_targetSeqNum;
+}
+
+void MemoryCache::setSenderSeqNum(int num)
+{
+    std::lock_guard<std::mutex> lock(m_seqNumMutex);
+    m_senderSeqNum = num;
+}
+
+void MemoryCache::setTargetSeqNum(int num)
+{
+    std::lock_guard<std::mutex> lock(m_seqNumMutex);
+    m_targetSeqNum = num;
+}

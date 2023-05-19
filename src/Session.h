@@ -67,14 +67,25 @@ public:
         return m_settings;
     }
 
+    void setSenderSeqNum(int num);
+    void setTargetSeqNum(int num);
+
+    int getSenderSeqNum();
+    int getTargetSeqNum();
+
     void runUpdate();
 
-    void send(const Message& msg);
+    void send(Message& msg);
+
+private:
+    bool load();
+
+    void populateMessage(Message& msg);
 
 private:
     void processMessage(const std::string& msg) override;
 
-    bool load();
+    void sendHeartbeat(long time, std::string testReqID = "");
 
 private:
     SessionSettings m_settings;
@@ -87,11 +98,24 @@ private:
     LoggerHandle m_logger;
     StoreHandle m_store;
 
+    SessionState m_state;
+
     std::unique_ptr<IFIXCache> m_cache;
 
     std::atomic<bool> m_enabled;
 
-    long m_lastHeartbeat;
+    long m_lastSentHeartbeat = 0;
+    long m_lastRecvHeartbeat = 0;
+    long m_heartbeatInterval = 0;
+
+    long m_lastLogon = 0;
+    long m_logoutTime = 0;
+    long m_logonInterval = 0;
+
+    long m_lastReconnect = 0;
+    long m_reconnectInterval = 0;
+
+    long m_testReqID = 0;
 
     SessionType m_sessionType;
 
