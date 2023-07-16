@@ -45,3 +45,8 @@ void MemoryCache::setTargetSeqNum(int num)
     std::lock_guard<std::mutex> lock(m_seqNumMutex);
     m_targetSeqNum = num;
 }
+
+std::map<int, Message>& MemoryCache::getInboundQueue()
+{
+    return m_inboundQueue;
+}

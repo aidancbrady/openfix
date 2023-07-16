@@ -78,6 +78,7 @@ struct Acceptor
     std::unordered_map<std::string, std::shared_ptr<MessageConsumer>> m_sessions;
 };
 
+
 class Network;
 
 class ReadBuffer
@@ -195,7 +196,8 @@ public:
     void start();
     void stop();
 
-    bool connect(const MessageConsumer& consumer, const std::string& hostname, int port);
+    bool connect(const std::string& hostname, int port);
+    bool listen(int port);
 
     bool addAcceptor(const SessionSettings& settings);
     void removeAcceptor(const SessionSettings& settings);

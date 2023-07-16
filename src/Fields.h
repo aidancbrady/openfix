@@ -30,20 +30,20 @@ namespace FIELD
     inline constexpr int SessionRejectReason = 373;
     inline constexpr int TestMessageIndicator = 464;
     inline constexpr int NextExpectedMsgSeqNum = 789;
-
-    enum class SessionRejectReason
-    {
-        InvalidTagNum = 0,
-        RequiredTagMissing = 1,
-        TagNotDefinedForMsg = 2,
-        UndefinedTag = 3,
-        TagWithoutValue = 4,
-        IncorrectValueForTag = 5,
-        IncorrectFormatForValue = 6,
-        DecryptionProblem = 7,
-        SignatureProblem = 8,
-        CompIDProblem = 9,
-        SendingTimeProblem = 10,
-        InvalidMsgType = 11
-    };
 }
+
+enum class SessionRejectReason
+{
+    InvalidTagNum = 0,
+    RequiredTagMissing = 1,
+    TagNotDefinedForMsg = 2,
+    UndefinedTag = 3,
+    TagWithoutValue = 4,
+    IncorrectValueForTag = 5,
+    IncorrectFormatForValue = 6,
+    DecryptionProblem = 7,
+    SignatureProblem = 8,
+    CompIDProblem = 9,
+    SendingTimeProblem = 10,
+    InvalidMsgType = 11
+};

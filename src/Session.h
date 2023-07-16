@@ -7,6 +7,7 @@
 #include "FIXCache.h"
 #include "FIXStore.h"
 #include "FIXLogger.h"
+#include "Fields.h"
 
 #include <openfix/Log.h>
 
@@ -86,7 +87,22 @@ private:
 private:
     void processMessage(const std::string& msg) override;
 
+    bool validateMessage(const Message& msg, long time);
+    bool validateSeqNum(const Message& msg);
+
+    void logout(const std::string& reason, bool terminate);
+    void terminate(const std::string& reason);
+
+    void handleLogon(const Message& msg);
+    void handleResendRequest(const Message& msg);
+    void handleSequenceReset(const Message& msg);
+
     void sendHeartbeat(long time, std::string testReqID = "");
+    void sendLogon();
+    void sendLogout(const std::string& reason, bool terminate);
+    void sendResendRequest(int from, int to);
+    void sendTestRequest();
+    void sendReject(const Message& msg, SessionRejectReason reason);
 
 private:
     SessionSettings m_settings;
@@ -104,6 +120,7 @@ private:
     std::unique_ptr<IFIXCache> m_cache;
 
     std::atomic<bool> m_enabled;
+    std::mutex m_mutex;
 
     long m_lastSentHeartbeat = 0;
     long m_lastRecvHeartbeat = 0;

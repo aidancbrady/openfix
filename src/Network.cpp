@@ -81,7 +81,7 @@ bool Network::connect(const std::string& hostname, int port)
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
-    int err = getaddrinfo(hostname.c_str(), std::to_string(port).c_str(), &hints, &ret);
+    int err = ::getaddrinfo(hostname.c_str(), std::to_string(port).c_str(), &hints, &ret);
     if (err != 0)
     {
         LOG_ERROR("Error in hostname resolution: " << gai_strerror(err));
@@ -90,7 +90,7 @@ bool Network::connect(const std::string& hostname, int port)
 
     for (struct addrinfo* addr = ret; addr != nullptr; addr = addr->ai_next)
     {
-        fd = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
+        fd = ::socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
         if (fd == -1)
         {
             err = errno;
@@ -106,7 +106,7 @@ bool Network::connect(const std::string& hostname, int port)
         fd = -1;
     }
 
-    freeaddrinfo(ret);
+    ::freeaddrinfo(ret);
 
     if (!addClient(fd))
     {
@@ -119,14 +119,15 @@ bool Network::connect(const std::string& hostname, int port)
         close(fd);
         return false;
     }
+
+    return true;
 }
 
-bool Network::addAcceptor(const SessionSettings& settings)
+bool Network::listen(int port)
 {
-    int port = settings.getLong(SessionSettings::ACCEPT_PORT);
     int fd = 0;
 
-    if ((fd = socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP)) < 0)
+    if ((fd = ::socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP)) < 0)
     {
         LOG_ERROR("Unable to create socket: " << strerror(errno));
         return false;
@@ -134,17 +135,17 @@ bool Network::addAcceptor(const SessionSettings& settings)
 
     struct sockaddr_in addr;
     addr.sin_family = AF_UNSPEC; // support ipv4
-    addr.sin_port = htons(port);
+    addr.sin_port = ::htons(port);
     addr.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(fd, (const struct sockaddr *) &addr, sizeof(addr)) < 0) 
+    if (::bind(fd, (const struct sockaddr *) &addr, sizeof(addr)) < 0) 
     {
         LOG_ERROR("Couldn't bind to port: " << strerror(errno));
         close(fd);
         return false;
     }
 
-    if (listen(fd, ACCEPTOR_BACKLOG) < 0) 
+    if (::listen(fd, ACCEPTOR_BACKLOG) < 0) 
     {
         LOG_ERROR("Couldn't listen to accept port: " << strerror(errno));
         close(fd);
@@ -155,14 +156,15 @@ bool Network::addAcceptor(const SessionSettings& settings)
     event.events = EPOLLIN | EPOLLET;
     event.data.fd = fd;
 
-    if (epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) 
+    if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) 
     {
-        LOG_ERROR("Couldn't add acceptor socket to epoll wait list: " << strerror(errno));
-        close(fd);
+        LOG_ERROR("Couldn't add listen socket to epoll wait list: " << strerror(errno));
+        ::close(fd);
         return false;
     }
 
     m_readerThreads[fd % m_readerThreadCount]->addAcceptor(settings, fd);
+    return true;
 }
 
 void Network::removeAcceptor(const SessionSettings& settings)
@@ -179,7 +181,7 @@ void Network::run()
 
     while (m_running)
     {
-        while ((numEvents = epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) > 0)
+        while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) > 0)
         {
             for (int i = 0; i < numEvents; i++) 
             {
@@ -206,7 +208,7 @@ bool Network::addClient(int fd)
     event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
     event.data.fd = fd;
 
-    if (epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
+    if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
     {
         LOG_WARN("Failed to register connection with epoll");
         return false;
@@ -334,13 +336,16 @@ void ReaderThread::process(int fd)
                 if (consumerIt == it->second->m_sessions.end())
                 {
                     LOG_ERROR("Received connection from unknown counterparty: " << cpty);
-                    close(fd);
+                    ::close(fd);
                     return;
                 }
 
                 // create new connection
                 consumerIt->second->setConnection(createHandle(fd));
                 m_connections[fd] = consumerIt->second;
+
+                for (const auto& msg : msgs)
+                    consumerIt->second->processMessage(msg);
             }
 
             return;
@@ -364,12 +369,12 @@ bool ReaderThread::accept(int serverFD, std::string& address)
     char ip[INET_ADDRSTRLEN + 1];
     if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) 
     {
-        LOG_WARN("Failed to parse incoming connection IP address: " << strerror(errno));
+        LOG_WARN("Failed to parse incoming connection IP address: " << ::strerror(errno));
         close(fd);
         return false;
     }
 
-    address = std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));
+    address = std::string(ip) + ":" + std::to_string(::ntohs(addr.sin_port));
 
     if (!m_network.addClient(fd))
     {
@@ -433,7 +438,7 @@ std::vector<std::string> ReadBuffer::read(int fd)
         it = m_bufferMap.insert({fd, ""}).first;
     std::string& buffer = it->second;
 
-    int bytes = recv(fd, m_buffer, sizeof(m_buffer), 0);
+    int bytes = ::recv(fd, m_buffer, sizeof(m_buffer), 0);
     if (bytes <= 0)
         ; // TODO error
     buffer.append(m_buffer, bytes);

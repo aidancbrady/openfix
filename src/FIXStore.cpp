@@ -46,17 +46,18 @@ StoreHandle FileStore::createStore(const SessionSettings& settings)
 
 void StoreHandle::store(int seqnum, const std::string& msg)
 {
-    std::ostream ostr;
+    std::ostringstream ostr;
     ostr << static_cast<char>(WriteType::MSG);
     ostr.write(reinterpret_cast<char*>(&seqnum), sizeof(seqnum));
-    ostr.write(reinterpret_cast<char*>(&msg.length()), sizeof(msg.length()));
+    size_t len = msg.length();
+    ostr.write(reinterpret_cast<char*>(&len), sizeof(len));
     ostr << msg;
     m_writeFunc(ostr.str());
 }
 
 void StoreHandle::setSenderSeqNum(int num)
 {
-    std::ostream ostr;
+    std::ostringstream ostr;
     ostr << static_cast<char>(WriteType::SENDER_SEQ_NUM);
     ostr.write(reinterpret_cast<char*>(&num), sizeof(num));
     m_writeFunc(ostr.str());
@@ -64,7 +65,7 @@ void StoreHandle::setSenderSeqNum(int num)
 
 void StoreHandle::setTargetSeqNum(int num)
 {
-    std::ostream ostr;
+    std::ostringstream ostr;
     ostr << static_cast<char>(WriteType::TARGET_SEQ_NUM);
     ostr.write(reinterpret_cast<char*>(&num), sizeof(num));
     m_writeFunc(ostr.str()); 

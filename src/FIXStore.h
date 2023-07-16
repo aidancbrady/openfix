@@ -23,7 +23,7 @@ class IFIXStore;
 class StoreHandle
 {
 public:
-    void store(const std::string& msg, int seqnum);
+    void store(int seqnum, const std::string& msg);
     void setSenderSeqNum(int num);
     void setTargetSeqNum(int num);
 
@@ -59,9 +59,9 @@ public:
     virtual StoreHandle createStore(const SessionSettings& settings) = 0;
 
 protected:
-    StoreHandle createHandle(const SessionSettings& settings, StoreFunction storeFunc, std::string path) const
+    StoreHandle createHandle(const SessionSettings& settings, WriteFunction writeFunc, std::string path) const
     {
-        return {settings, std::move(storeFunc), std::move(path)};
+        return {settings, std::move(writeFunc), std::move(path)};
     }
 };
 

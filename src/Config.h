@@ -114,7 +114,7 @@ protected:
         return {name, defaultValue, defaults().m_bools.size() - 1};
     }
 
-    static inline ConfigItem<bool> createDouble(std::string name, double defaultValue = 0.0)
+    static inline ConfigItem<double> createDouble(std::string name, double defaultValue = 0.0)
     {
         defaults().m_doubles.push_back(defaultValue);
         defaults().m_fields.insert({name, {typeid(double), defaults().m_doubles.size() - 1}});

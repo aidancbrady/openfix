@@ -20,6 +20,8 @@ public:
     virtual int getSenderSeqNum() = 0;
     virtual int getTargetSeqNum() = 0;
 
+    virtual std::map<int, Message>& getInboundQueue();
+
     virtual void load(const SessionData& data) = 0;
 };
 
@@ -36,6 +38,8 @@ public:
     int getSenderSeqNum() override;
     int getTargetSeqNum() override;
 
+    std::map<int, Message>& getInboundQueue() override;
+
     void load(const SessionData& data) override;
     
 private:
@@ -48,6 +52,8 @@ private:
     std::map<int, Message> m_messages;
 
     std::mutex m_seqNumMutex;
+
+    std::map<int, Message> m_inboundQueue;
 
     CREATE_LOGGER("MemoryCache");
 };

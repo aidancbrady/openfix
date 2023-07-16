@@ -177,12 +177,27 @@ public:
         return m_header;
     }
 
+    const FieldMap& getHeader() const
+    {
+        return m_header;
+    }
+
     FieldMap& getTrailer()
     {
         return m_trailer;
     }
 
+    const FieldMap& getTrailer() const
+    {
+        return m_trailer;
+    }
+
     FieldMap& getBody()
+    {
+        return m_body;
+    }
+
+    const FieldMap& getBody() const
     {
         return m_body;
     }
