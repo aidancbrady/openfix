@@ -3,6 +3,7 @@
 #include <openfix/Dictionary.h>
 #include <openfix/Message.h>
 #include <openfix/Fields.h>
+#include <openfix/Utils.h>
 
 void convert(std::string& fix)
 {
@@ -46,6 +47,12 @@ TEST_F(MessageTest, SimpleTest) {
     std::cout << msg.toString() << std::endl;
 
     throw std::runtime_error("");
+}
+
+TEST_F(MessageTest, TimeStampConverter) {
+    auto time = "20240330-12:00:00.123";
+    auto ms = Utils::parseUTCTimestamp(time);
+    EXPECT_EQ(ms, 1711800000000000123ul);
 }
 
 int main(int argc, char **argv) 

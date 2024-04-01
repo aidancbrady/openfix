@@ -40,7 +40,7 @@ struct SessionDelegate
     virtual void onLogout() const {};
 };
 
-class Session : MessageConsumer
+class Session
 {
 public:
     Session(SessionSettings settings, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store);
@@ -49,7 +49,7 @@ public:
     void start();
     void stop();
 
-    bool isEnabled() override
+    bool isEnabled()
     {
         return m_enabled.load();
     }
@@ -85,7 +85,7 @@ private:
     void populateMessage(Message& msg);
 
 private:
-    void processMessage(const std::string& msg) override;
+    void processMessage(const std::string& msg);
 
     bool validateMessage(const Message& msg, long time);
     bool validateSeqNum(const Message& msg);
@@ -107,13 +107,13 @@ private:
 private:
     SessionSettings m_settings;
 
+    std::shared_ptr<NetworkHandler> m_network;
+
     std::shared_ptr<SessionDelegate> m_delegate;
 
-    std::shared_ptr<ConnectionHandle> m_connection;
     std::shared_ptr<Dictionary> m_dictionary;
 
     LoggerHandle m_logger;
-    StoreHandle m_store;
 
     SessionState m_state;
 

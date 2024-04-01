@@ -18,6 +18,9 @@
 #define READ_BUF_SIZE 1024
 #define WRITE_BUF_SIZE 1024
 
+class Network;
+class ReaderThread;
+
 using SendCallback = std::function<void()>;
 struct MsgPacket
 {
@@ -30,27 +33,15 @@ struct MsgPacket
 class ConnectionHandle
 {
 public:
-    using DisconnectFunction = std::function<void()>;
-    using SendFunction = std::function<void(const MsgPacket&)>;
-
-    ConnectionHandle(int fd, DisconnectFunction disconnect, SendFunction send) 
+    ConnectionHandle(Network& network, ReaderThread& readerThread, int fd) 
         : m_fd(fd)
-        , m_disconnect(std::move(disconnect))
-        , m_send(std::move(send))
+        , m_network(network)
+        , m_readerThread(readerThread)
     {}
 
-    // will not remove this session from connection map, just 'kicks' the socket connection
-    void disconnect()
-    {
-        m_disconnect();
-    }
+    void send(const MsgPacket& msg);
+    void disconnect();
 
-    void send(const MsgPacket& msg)
-    {
-        m_send(msg);
-    }
-
-    // extremely dangerous, I might remove this
     size_t getFD()
     {
         return m_fd;
@@ -59,27 +50,62 @@ public:
 private:
     int m_fd;
 
-    DisconnectFunction m_disconnect;
-    SendFunction m_send;
+    Network& m_network;
+    ReaderThread& m_readerThread;
 };
 
-struct MessageConsumer
+class NetworkHandler
 {
-    virtual ~MessageConsumer() = default;
+public:
+    using MessageCallback = std::function<void(const std::string&)>;
 
-    virtual bool isEnabled() = 0;
-    virtual void processMessage(const std::string& msg) = 0;
-    virtual void setConnection(std::shared_ptr<ConnectionHandle> connection) = 0;
+    NetworkHandler(MessageCallback callback) : m_callback(std::move(callback)) {}
+
+    virtual ~NetworkHandler() = default;
+
+    void processMessage(const std::string& msg)
+    {
+        m_callback(msg);
+    }
+
+    void send(const MsgPacket& msg)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_connection)
+            m_connection->send(msg);
+    }
+
+    void disconnect()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_connection)
+            m_connection->disconnect();
+    }
+
+    void setConnection(std::shared_ptr<ConnectionHandle> connection)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_connection = connection;
+    }
+
+    bool isConnected()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_connection != nullptr;
+    }
+
+private:
+    MessageCallback m_callback;
+
+    std::mutex m_mutex;
+    std::shared_ptr<ConnectionHandle> m_connection;
 };
 
 struct Acceptor
 {
     // sendercompid -> session
-    std::unordered_map<std::string, std::shared_ptr<MessageConsumer>> m_sessions;
+    std::unordered_map<std::string, std::shared_ptr<NetworkHandler>> m_sessions;
 };
-
-
-class Network;
 
 class ReadBuffer
 {
@@ -109,7 +135,7 @@ public:
     void queue(int fd);
     void disconnect(int fd);
 
-    void addConnection(const MessageConsumer& consumer, int fd);
+    void addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd);
     void addAcceptor(const SessionSettings& settings, int fd);
     void removeAcceptor(const SessionSettings& settings);
 
@@ -122,7 +148,6 @@ public:
 
 private:
     bool accept(int serverFD, std::string& address);
-    std::shared_ptr<ConnectionHandle> createHandle(int fd);
 
     std::atomic<bool> m_running;
     std::mutex m_mutex;
@@ -138,7 +163,7 @@ private:
     // fd -> unassigned connection from acceptor socket
     std::unordered_map<int, std::shared_ptr<Acceptor>> m_unknownConnections;
     // fd -> assigned connection
-    std::unordered_map<int, std::shared_ptr<MessageConsumer>> m_connections;
+    std::unordered_map<int, std::shared_ptr<NetworkHandler>> m_connections;
 
     Network& m_network;
 
@@ -196,8 +221,8 @@ public:
     void start();
     void stop();
 
-    bool connect(const std::string& hostname, int port);
-    bool listen(int port);
+    bool connect(const std::shared_ptr<NetworkHandler>& handler, const std::string& hostname, int port);
+    bool listen(const SessionSettings& settings, int port);
 
     bool addAcceptor(const SessionSettings& settings);
     void removeAcceptor(const SessionSettings& settings);
@@ -224,4 +249,5 @@ private:
 
     friend class ReaderThread;
     friend class WriterThread;
+    friend class ConnectionHandle;
 };

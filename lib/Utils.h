@@ -2,10 +2,11 @@
 
 #include <chrono>
 #include <sstream>
+#include <iomanip>
 
 struct Utils
 {
-    inline static std::string UTC_TIMESTAMP_FMT = "%Y%M%d-%H:%M:%S.";
+    inline static std::string UTC_TIMESTAMP_FMT = "%Y%m%d-%H:%M:%S.";
 
     inline static long getEpochMillis()
     {
@@ -15,16 +16,16 @@ struct Utils
 
     inline static long parseUTCTimestamp(const std::string& timestamp)
     {
-        using namespace std::chrono;
-        std::istringstream stream(timestamp);
+        std::tm tm = {};
+        std::stringstream ss(timestamp);
+        ss >> std::get_time(&tm, UTC_TIMESTAMP_FMT.c_str());
+        auto ms = std::chrono::system_clock::from_time_t(std::mktime(&tm)).time_since_epoch().count();
 
-        sys_time<milliseconds> time;
-        from_stream(stream, UTC_TIMESTAMP_FMT, time);
+        auto ms_it = timestamp.find('.');
+        if (ms_it != std::string::npos) {
+            ms += std::stoi(timestamp.substr(ms_it + 1));
+        }
 
-        milliseconds millis;
-        from_stream(stream, "%S", millis);
-        time += millis;
-
-        return time.time_since_epoch().count();
+        return ms;
     }
 };

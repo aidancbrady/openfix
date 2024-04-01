@@ -13,10 +13,3 @@ cc_library(
         "@oneTBB//:tbb"
     ]
 )
-
-cc_binary(
-    name = "openfix-exe",
-    deps = [
-        ":openfix"
-    ]
-)

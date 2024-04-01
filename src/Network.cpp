@@ -70,7 +70,7 @@ void Network::stop()
     close(m_epollFD);
 }
 
-bool Network::connect(const std::string& hostname, int port)
+bool Network::connect(const std::shared_ptr<NetworkHandler>& handler, const std::string& hostname, int port)
 {
     int fd = 0;
 
@@ -114,7 +114,7 @@ bool Network::connect(const std::string& hostname, int port)
         return false;
     }
 
-    if (!m_readerThreads[fd % m_readerThreadCount].addClient(fd))
+    if (!m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd))
     {
         close(fd);
         return false;
@@ -123,7 +123,7 @@ bool Network::connect(const std::string& hostname, int port)
     return true;
 }
 
-bool Network::listen(int port)
+bool Network::listen(const SessionSettings& settings, int port)
 {
     int fd = 0;
 
@@ -213,6 +213,8 @@ bool Network::addClient(int fd)
         LOG_WARN("Failed to register connection with epoll");
         return false;
     }
+
+    return true;
 }
 
 ////////////////////////////////////////////
@@ -266,7 +268,7 @@ void ReaderThread::process()
 }
 
 void ReaderThread::process(int fd)
-{ 
+{
     // lock here as we're touching connection maps
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -341,8 +343,7 @@ void ReaderThread::process(int fd)
                 }
 
                 // create new connection
-                consumerIt->second->setConnection(createHandle(fd));
-                m_connections[fd] = consumerIt->second;
+                addConnection(consumerIt->second, fd);
 
                 for (const auto& msg : msgs)
                     consumerIt->second->processMessage(msg);
@@ -402,22 +403,10 @@ void ReaderThread::stop()
         close(k);
 }
 
-std::shared_ptr<ConnectionHandle> ReaderThread::createHandle(int fd)
+void ReaderThread::addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd)
 {
-    auto disconnect = [&]() {
-        ReaderThread::disconnect(fd);
-    };
-
-    auto send = [&](const std::string& msg) {
-        m_network.m_writerThreads[fd % m_network.m_writerThreadCount]->send(fd, msg);
-    };
-
-    return std::make_unique<ConnectionHandle>(fd, disconnect, send);
-}
-
-void ReaderThread::addConnection(const MessageConsumer& consumer, int fd)
-{
-
+    handler->setConnection(std::make_shared<ConnectionHandle>(m_network, *this, fd));
+    m_connections[fd] = handler;
 }
 
 void ReaderThread::addAcceptor(const SessionSettings& settings, int fd)
@@ -551,4 +540,18 @@ void WriterThread::stop()
     std::lock_guard<std::mutex> lock(m_mutex);
     m_running.store(false, std::memory_order_release);
     m_cv.notify_one();
+}
+
+////////////////////////////////////////////
+//            ConnectionHandle            //
+////////////////////////////////////////////
+
+void ConnectionHandle::disconnect()
+{
+    m_readerThread.disconnect(m_fd);
+}
+
+void ConnectionHandle::send(const MsgPacket& msg)
+{
+    m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->send(m_fd, msg);
 }

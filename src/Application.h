@@ -3,6 +3,7 @@
 #include "FIXLogger.h"
 #include "FIXStore.h"
 #include "Session.h"
+#include "Network.h"
 #include "lib/Dispatcher.h"
 
 #include <memory>
@@ -47,6 +48,8 @@ private:
 
     std::shared_ptr<IFIXLogger> m_logger;
     std::shared_ptr<IFIXStore> m_store;
+
+    std::unique_ptr<Network> m_network;
 
     std::atomic<bool> m_running;
 

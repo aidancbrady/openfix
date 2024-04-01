@@ -12,7 +12,7 @@ class IFIXCache
 public:
     virtual ~IFIXCache() = default;
 
-    virtual void cache(const Message& msg) = 0;
+    virtual void cache(int seqnum, const Message& msg) = 0;
 
     virtual void setSenderSeqNum(int num) = 0;
     virtual void setTargetSeqNum(int num) = 0;
@@ -20,17 +20,17 @@ public:
     virtual int getSenderSeqNum() = 0;
     virtual int getTargetSeqNum() = 0;
 
-    virtual std::map<int, Message>& getInboundQueue();
+    virtual std::map<int, Message>& getInboundQueue() = 0;
 
-    virtual void load(const SessionData& data) = 0;
+    virtual void load() = 0;
 };
 
 class MemoryCache : public IFIXCache
 {
 public:
-    MemoryCache(const SessionSettings& settings, std::shared_ptr<Dictionary> dictionary);
+    MemoryCache(const SessionSettings& settings, std::shared_ptr<Dictionary> dictionary, std::shared_ptr<IFIXStore> store);
 
-    void cache(const Message& msg) override;
+    void cache(int seqnum, const Message& msg) override;
 
     void setSenderSeqNum(int num) override;
     void setTargetSeqNum(int num) override;
@@ -40,7 +40,7 @@ public:
 
     std::map<int, Message>& getInboundQueue() override;
 
-    void load(const SessionData& data) override;
+    void load() override;
     
 private:
     const SessionSettings& m_settings;
@@ -51,9 +51,11 @@ private:
     
     std::map<int, Message> m_messages;
 
-    std::mutex m_seqNumMutex;
+    std::mutex m_mutex;
 
     std::map<int, Message> m_inboundQueue;
+
+    StoreHandle m_store;
 
     CREATE_LOGGER("MemoryCache");
 };

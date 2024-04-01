@@ -11,10 +11,12 @@
 Session::Session(SessionSettings settings, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store)
     : m_settings(settings)
     , m_logger(logger->createLogger(settings))
-    , m_store(store->createStore(settings))
     , m_state(SessionState::LOGON)
 {
     m_dictionary = DictionaryRegistry::instance().load(settings.getString(SessionSettings::FIX_DICTIONARY));
+    m_cache = std::make_unique<MemoryCache>(settings, m_dictionary, store);
+
+    m_network = std::make_shared<NetworkHandler>(std::bind(Session::processMessage, this, std::placeholders::_1));
 
     m_heartbeatInterval = settings.getLong(SessionSettings::HEARTBEAT_INTERVAL);
     m_logonInterval = settings.getLong(SessionSettings::LOGON_INTERVAL);
@@ -46,6 +48,9 @@ void Session::stop()
 
 void Session::processMessage(const std::string& text)
 {
+    // lock whenever we're processing a message
+    std::lock_guard<std::mutex> lock(m_mutex);
+
     LOG_DEBUG("Received message: " << text);
 
     if (m_state == SessionState::KILLING)
@@ -125,6 +130,9 @@ void Session::send(Message& msg, SendCallback callback)
 
 void Session::runUpdate()
 {
+    // lock during our update loop
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
     long time = Utils::getEpochMillis();
 
     if (m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
@@ -197,14 +205,14 @@ void Session::handleResendRequest(const Message& msg)
     int beginSeqNo = std::stoi(msg.getBody().getField(FIELD::BeginSeqNo));
     int endSeqNo = std::stoi(msg.getBody().getField(FIELD::EndSeqNo));
 
-
+    LOG_INFO(beginSeqNo << endSeqNo);
 }
 
 void Session::handleSequenceReset(const Message& msg)
 {
     bool gapFill = msg.getBody().tryGetBool(FIELD::GapFillFlag);
     int newSeqNum = std::stoi(msg.getBody().getField(FIELD::NewSeqNo));
-    int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
+    //int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
 
     // queue out-of-sequence gapfills
     if (gapFill && !validateSeqNum(msg))
@@ -291,10 +299,8 @@ void Session::terminate(const std::string& reason)
 bool Session::load()
 {
     try {
-        // load data from store
-        auto data = m_store.load();
-        // insert data into cache
-        m_cache->load(data);
+        // load data from store & insert into cache
+        m_cache->load();
         return true;
     } catch (...) {
         return false;
@@ -320,7 +326,7 @@ bool Session::validateMessage(const Message& msg, long time)
     if (!msg.getHeader().has(FIELD::MsgSeqNum))
     {
         logout("Message missing MsgSeqNum(34)", true);
-        return;
+        return false;
     }
 
     // validate BeginString, SenderCompID, TargetCompID
