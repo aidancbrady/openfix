@@ -51,6 +51,14 @@ void MemoryCache::setTargetSeqNum(int num)
     m_store.setTargetSeqNum(num);
 }
 
+int MemoryCache::nextSenderSeqNum()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    int next = getSenderSeqNum() + 1;
+    setSenderSeqNum(next);
+    return next;
+}
+
 void MemoryCache::cache(int seqnum, const Message& msg)
 {
     std::lock_guard<std::mutex> lock(m_mutex);

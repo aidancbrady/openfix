@@ -20,6 +20,8 @@ public:
     virtual int getSenderSeqNum() = 0;
     virtual int getTargetSeqNum() = 0;
 
+    virtual int nextSenderSeqNum() = 0;
+
     virtual std::map<int, Message>& getInboundQueue() = 0;
 
     virtual void load() = 0;
@@ -37,6 +39,8 @@ public:
 
     int getSenderSeqNum() override;
     int getTargetSeqNum() override;
+
+    int nextSenderSeqNum() override;
 
     std::map<int, Message>& getInboundQueue() override;
 

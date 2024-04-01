@@ -8,7 +8,7 @@
 
 #include <strings.h>
 
-Session::Session(SessionSettings settings, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store)
+Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store)
     : m_settings(settings)
     , m_logger(logger->createLogger(settings))
     , m_state(SessionState::LOGON)
@@ -16,19 +16,11 @@ Session::Session(SessionSettings settings, std::shared_ptr<IFIXLogger>& logger, 
     m_dictionary = DictionaryRegistry::instance().load(settings.getString(SessionSettings::FIX_DICTIONARY));
     m_cache = std::make_unique<MemoryCache>(settings, m_dictionary, store);
 
-    m_network = std::make_shared<NetworkHandler>(std::bind(Session::processMessage, this, std::placeholders::_1));
-
     m_heartbeatInterval = settings.getLong(SessionSettings::HEARTBEAT_INTERVAL);
     m_logonInterval = settings.getLong(SessionSettings::LOGON_INTERVAL);
     m_reconnectInterval = settings.getLong(SessionSettings::RECONNECT_INTERVAL);
     
-    std::string tmp = settings.getString(SessionSettings::SESSION_TYPE);
-    if (strcasecmp(tmp.c_str(), "initiator") == 0)
-        m_sessionType = SessionType::INITIATOR;
-    else if (strcasecmp(tmp.c_str(), "acceptor") == 0)
-        m_sessionType = SessionType::ACCEPTOR;
-    else
-        throw MisconfiguredSessionError("Unknown session type: " + tmp);
+    m_network = std::make_shared<NetworkHandler>(m_settings, network, std::bind(&Session::processMessage, this, std::placeholders::_1));
 }
 
 Session::~Session()
@@ -38,12 +30,12 @@ Session::~Session()
 
 void Session::start()
 {
-    
+    runUpdate();
 }
 
 void Session::stop()
 {
-
+    m_network->stop();
 }
 
 void Session::processMessage(const std::string& text)
@@ -122,10 +114,11 @@ void Session::processMessage(const std::string& text)
     }
 }
 
-void Session::send(Message& msg, SendCallback callback)
+void Session::send(Message& msg, SendCallback_T callback)
 {
-    populateMessage(msg);
-    // TODO send
+    int seqnum = populateMessage(msg);
+    m_cache->cache(seqnum, msg);
+    m_network->send({msg.toString(), callback});
 }
 
 void Session::runUpdate()
@@ -181,7 +174,7 @@ void Session::handleLogon(const Message& msg)
         return;
     }
 
-    if (m_sessionType == SessionType::ACCEPTOR)
+    if (m_settings.SESSION_TYPE == SessionType::ACCEPTOR)
         m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt));
 
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
@@ -292,7 +285,7 @@ void Session::terminate(const std::string& reason)
 {
     LOG_ERROR("Terminating connection: " << reason);
     m_logger.logEvent(reason);
-    // terminate
+    m_network->disconnect();
     m_state = SessionState::LOGON;
 }
 
@@ -307,10 +300,15 @@ bool Session::load()
     }
 }
 
-void Session::populateMessage(Message& msg)
+int Session::populateMessage(Message& msg)
 {
+    int seqnum = m_cache->nextSenderSeqNum();
+
     msg.getHeader().setField(FIELD::SenderCompID, m_settings.getString(SessionSettings::SENDER_COMP_ID));
     msg.getHeader().setField(FIELD::TargetCompID, m_settings.getString(SessionSettings::TARGET_COMP_ID));
+    msg.getHeader().setField(FIELD::MsgSeqNum, std::to_string(seqnum));
+
+    return seqnum;
 }
 
 bool Session::validateMessage(const Message& msg, long time)

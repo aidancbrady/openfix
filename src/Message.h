@@ -153,8 +153,6 @@ public:
         return m_fields.find(tag) != m_fields.end();
     }
 
-    std::string toString(const SessionSettings& settings);
-
     std::string toString()
     {
         std::ostringstream ostr;

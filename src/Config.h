@@ -8,6 +8,18 @@
 #include <typeindex>
 #include <typeinfo>
 
+#include <strings.h>
+
+#include "Exception.h"
+
+using SessionID_T = std::string;
+
+enum class SessionType
+{
+    ACCEPTOR,
+    INITIATOR,
+};
+
 template<typename Class, typename Type>
 struct BaseConfigItem
 {
@@ -200,7 +212,10 @@ struct PlatformSettings : StaticConfig<PlatformSettings>
 
 struct SessionSettings : Config<SessionSettings>
 {
-    static inline ConfigItem<std::string> SESSION_TYPE = createString("SessionType");
+    SessionSettings() 
+        : SESSION_ID(getString(SENDER_COMP_ID) + ":" + getString(TARGET_COMP_ID))
+        , SESSION_TYPE(getSessionType())
+    {}
 
     static inline ConfigItem<std::string> BEGIN_STRING = createString("BeginString");
 
@@ -220,10 +235,30 @@ struct SessionSettings : Config<SessionSettings>
 
     static inline ConfigItem<long> ACCEPT_PORT = createLong("AcceptPort");
 
+    static inline ConfigItem<std::string> CONNECT_HOST = createString("ConnectHost");
+    static inline ConfigItem<long> CONNECT_PORT = createLong("ConnectPort");
+
     static inline ConfigItem<long> HEARTBEAT_INTERVAL = createLong("HeartbeatInterval", 10L);
     static inline ConfigItem<long> LOGON_INTERVAL = createLong("LogonInterval", 10L);
     static inline ConfigItem<long> RECONNECT_INTERVAL = createLong("ReconnectInterval", 10L);
 
     static inline ConfigItem<double> TEST_REQUEST_THRESHOLD = createDouble("TestRequestThreshold", 2.0);
     static inline ConfigItem<long> SENDING_TIME_THRESHOLD = createLong("SendingTimeThreshold", 10L);
+
+    const std::string SESSION_ID;
+    const SessionType SESSION_TYPE;
+
+private:
+    SessionType getSessionType()
+    {
+        std::string tmp = getString(SESSION_TYPE_STR);
+        if (strcasecmp(tmp.c_str(), "initiator") == 0)
+            return SessionType::INITIATOR;
+        else if (strcasecmp(tmp.c_str(), "acceptor") == 0)
+            return SessionType::ACCEPTOR;
+        else
+            throw MisconfiguredSessionError("Unknown session type: " + tmp);
+    }
+
+    static inline ConfigItem<std::string> SESSION_TYPE_STR = createString("SessionType");
 };

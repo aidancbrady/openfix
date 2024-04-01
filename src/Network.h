@@ -21,13 +21,11 @@
 class Network;
 class ReaderThread;
 
-using SendCallback = std::function<void()>;
+using SendCallback_T = std::function<void()>;
 struct MsgPacket
 {
-    MsgPacket(std::string msg) : m_msg(std::move(msg)) {}
-
     std::string m_msg;
-    SendCallback m_callback;
+    SendCallback_T m_callback;
 };
 
 class ConnectionHandle
@@ -54,48 +52,32 @@ private:
     ReaderThread& m_readerThread;
 };
 
-class NetworkHandler
+class NetworkHandler : public std::enable_shared_from_this<NetworkHandler>
 {
 public:
-    using MessageCallback = std::function<void(const std::string&)>;
+    using MessageCallback_T = std::function<void(const std::string&)>;
 
-    NetworkHandler(MessageCallback callback) : m_callback(std::move(callback)) {}
+    NetworkHandler(const SessionSettings& settings, Network& network, MessageCallback_T callback) 
+        : m_settings(settings)
+        , m_network(network)
+        , m_callback(std::move(callback)) {}
 
     virtual ~NetworkHandler() = default;
 
-    void processMessage(const std::string& msg)
-    {
-        m_callback(msg);
-    }
+    void start();
+    void stop();
 
-    void send(const MsgPacket& msg)
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_connection)
-            m_connection->send(msg);
-    }
+    void processMessage(const std::string& msg);
+    void send(const MsgPacket& msg);
 
-    void disconnect()
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_connection)
-            m_connection->disconnect();
-    }
-
-    void setConnection(std::shared_ptr<ConnectionHandle> connection)
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_connection = connection;
-    }
-
-    bool isConnected()
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_connection != nullptr;
-    }
+    void disconnect();
+    void setConnection(std::shared_ptr<ConnectionHandle> connection);
+    bool isConnected();
 
 private:
-    MessageCallback m_callback;
+    const SessionSettings& m_settings;
+    Network& m_network;
+    MessageCallback_T m_callback;
 
     std::mutex m_mutex;
     std::shared_ptr<ConnectionHandle> m_connection;
@@ -103,8 +85,8 @@ private:
 
 struct Acceptor
 {
-    // sendercompid -> session
-    std::unordered_map<std::string, std::shared_ptr<NetworkHandler>> m_sessions;
+    // sessionID -> session network handler
+    std::unordered_map<SessionID_T, std::shared_ptr<NetworkHandler>> m_sessions;
 };
 
 class ReadBuffer
@@ -135,9 +117,10 @@ public:
     void queue(int fd);
     void disconnect(int fd);
 
-    void addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd);
-    void addAcceptor(const SessionSettings& settings, int fd);
-    void removeAcceptor(const SessionSettings& settings);
+    bool addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd);
+
+    void addAcceptor(const std::shared_ptr<NetworkHandler>& handler, const SessionID_T sessionID, int fd);
+    void removeAcceptor(const SessionID_T sessionID, int fd);
 
     void stop();
 
@@ -181,7 +164,7 @@ struct WriteBuffer
     std::string m_queue;
     std::string m_buffer;
 
-    tbb::concurrent_queue<SendCallback> m_sendCallbacks;
+    tbb::concurrent_queue<SendCallback_T> m_sendCallbacks;
 };
 
 class WriterThread
@@ -221,11 +204,10 @@ public:
     void start();
     void stop();
 
-    bool connect(const std::shared_ptr<NetworkHandler>& handler, const std::string& hostname, int port);
-    bool listen(const SessionSettings& settings, int port);
+    bool connect(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler);
 
-    bool addAcceptor(const SessionSettings& settings);
-    void removeAcceptor(const SessionSettings& settings);
+    bool addAcceptor(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler);
+    bool removeAcceptor(const SessionSettings& settings);
 
 private:
     void run();
@@ -233,6 +215,7 @@ private:
     bool addClient(int fd);
 
     // acceptor port -> fd
+    std::mutex m_mutex;
     std::unordered_map<int, int> m_acceptors;
 
     int m_epollFD;

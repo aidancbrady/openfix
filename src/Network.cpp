@@ -70,8 +70,11 @@ void Network::stop()
     close(m_epollFD);
 }
 
-bool Network::connect(const std::shared_ptr<NetworkHandler>& handler, const std::string& hostname, int port)
+bool Network::connect(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler)
 {
+    std::string hostname = settings.getString(SessionSettings::CONNECT_HOST);
+    int port = settings.getLong(SessionSettings::CONNECT_PORT);
+
     int fd = 0;
 
     struct addrinfo hints;
@@ -123,53 +126,81 @@ bool Network::connect(const std::shared_ptr<NetworkHandler>& handler, const std:
     return true;
 }
 
-bool Network::listen(const SessionSettings& settings, int port)
+bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler)
 {
-    int fd = 0;
+    // acceptors should be created/destroyed atomically
+    std::lock_guard lock(m_mutex);
 
-    if ((fd = ::socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP)) < 0)
+    int port = settings.getLong(SessionSettings::ACCEPT_PORT);
+    int fd = m_acceptors[port];
+
+    // see if we already have a live fd associated with this accept port
+    if (fd == 0)
     {
-        LOG_ERROR("Unable to create socket: " << strerror(errno));
-        return false;
+        if ((fd = ::socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP)) < 0)
+        {
+            LOG_ERROR("Unable to create socket: " << strerror(errno));
+            return false;
+        }
+
+        struct sockaddr_in addr;
+        addr.sin_family = AF_UNSPEC; // support ipv4
+        addr.sin_port = ::htons(port);
+        addr.sin_addr.s_addr = INADDR_ANY;
+
+        if (::bind(fd, (const struct sockaddr *) &addr, sizeof(addr)) < 0) 
+        {
+            LOG_ERROR("Couldn't bind to port: " << strerror(errno));
+            close(fd);
+            return false;
+        }
+
+        if (::listen(fd, ACCEPTOR_BACKLOG) < 0) 
+        {
+            LOG_ERROR("Couldn't listen to accept port: " << strerror(errno));
+            close(fd);
+            return false;
+        }
+
+        struct epoll_event event;
+        event.events = EPOLLIN | EPOLLET;
+        event.data.fd = fd;
+
+        if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) 
+        {
+            LOG_ERROR("Couldn't add listen socket to epoll wait list: " << strerror(errno));
+            ::close(fd);
+            return false;
+        }
+
+        // add to port->fd map
+        m_acceptors[port] = fd;
     }
 
-    struct sockaddr_in addr;
-    addr.sin_family = AF_UNSPEC; // support ipv4
-    addr.sin_port = ::htons(port);
-    addr.sin_addr.s_addr = INADDR_ANY;
-
-    if (::bind(fd, (const struct sockaddr *) &addr, sizeof(addr)) < 0) 
-    {
-        LOG_ERROR("Couldn't bind to port: " << strerror(errno));
-        close(fd);
-        return false;
-    }
-
-    if (::listen(fd, ACCEPTOR_BACKLOG) < 0) 
-    {
-        LOG_ERROR("Couldn't listen to accept port: " << strerror(errno));
-        close(fd);
-        return false;
-    }
-
-    struct epoll_event event;
-    event.events = EPOLLIN | EPOLLET;
-    event.data.fd = fd;
-
-    if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) 
-    {
-        LOG_ERROR("Couldn't add listen socket to epoll wait list: " << strerror(errno));
-        ::close(fd);
-        return false;
-    }
-
-    m_readerThreads[fd % m_readerThreadCount]->addAcceptor(settings, fd);
+    m_readerThreads[fd % m_readerThreadCount]->addAcceptor(handler, settings.SESSION_ID, fd);
     return true;
 }
 
-void Network::removeAcceptor(const SessionSettings& settings)
+bool Network::removeAcceptor(const SessionSettings& settings)
 {
+    // acceptors should be created/destroyed atomically
+    std::lock_guard lock(m_mutex);
 
+    int port = settings.getLong(SessionSettings::ACCEPT_PORT);
+    int fd = m_acceptors[port];
+
+    if (fd == 0)
+    {
+        // socket doesn't exist
+        return false;
+    }
+
+    m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.SESSION_ID, port);
+
+    // remove from port->fd map
+    m_acceptors.erase(port);
+
+    return true;
 }
 
 void Network::run()
@@ -403,15 +434,27 @@ void ReaderThread::stop()
         close(k);
 }
 
-void ReaderThread::addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd)
+bool ReaderThread::addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd)
 {
+    std::lock_guard lock(m_mutex);
     handler->setConnection(std::make_shared<ConnectionHandle>(m_network, *this, fd));
     m_connections[fd] = handler;
+
+    return true;
 }
 
-void ReaderThread::addAcceptor(const SessionSettings& settings, int fd)
+void ReaderThread::addAcceptor(const std::shared_ptr<NetworkHandler>& handler, const SessionID_T sessionID, int fd)
 {
-    
+    std::lock_guard lock(m_mutex);
+    m_acceptorSockets[fd]->m_sessions[sessionID] = handler;
+}
+
+void ReaderThread::removeAcceptor(const SessionID_T sessionID, int fd)
+{
+    std::lock_guard lock(m_mutex);
+    m_acceptorSockets[fd]->m_sessions.erase(sessionID);
+    if (m_acceptorSockets[fd]->m_sessions.empty())
+        m_acceptorSockets.erase(fd);
 }
 
 ////////////////////////////////////////////
@@ -518,7 +561,7 @@ void WriterThread::process()
             }
 
             // process callbacks
-            SendCallback callback;
+            SendCallback_T callback;
             while (buffer.m_sendCallbacks.try_pop(callback))
                 callback();
 
@@ -554,4 +597,63 @@ void ConnectionHandle::disconnect()
 void ConnectionHandle::send(const MsgPacket& msg)
 {
     m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->send(m_fd, msg);
+}
+
+////////////////////////////////////////////
+//             NetworkHandler             //
+////////////////////////////////////////////
+
+void NetworkHandler::start()
+{
+    if (m_settings.SESSION_TYPE == SessionType::INITIATOR)
+    {
+        m_network.connect(m_settings, shared_from_this());
+    }
+    else if (m_settings.SESSION_TYPE == SessionType::ACCEPTOR)
+    {
+        m_network.addAcceptor(m_settings, shared_from_this());
+    }
+}
+
+void NetworkHandler::stop()
+{
+    // remove any existing connection
+    disconnect();
+
+    // shut down if we're an acceptor
+    if (m_settings.SESSION_TYPE == SessionType::ACCEPTOR)
+    {
+        m_network.removeAcceptor(m_settings);
+    }
+}
+
+void NetworkHandler::processMessage(const std::string& msg)
+{
+    m_callback(msg);
+}
+
+void NetworkHandler::send(const MsgPacket& msg)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_connection)
+        m_connection->send(msg);
+}
+
+void NetworkHandler::disconnect()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_connection)
+        m_connection->disconnect();
+}
+
+void NetworkHandler::setConnection(std::shared_ptr<ConnectionHandle> connection)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_connection = connection;
+}
+
+bool NetworkHandler::isConnected()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_connection != nullptr;
 }

@@ -3,3 +3,5 @@ bazel-bin
 bazel-openfix
 bazel-out
 bazel-testlogs
+
+MODULE.bazel.lock

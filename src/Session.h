@@ -15,12 +15,6 @@
 #include <atomic>
 #include <functional>
 
-enum class SessionType
-{
-    ACCEPTOR,
-    INITIATOR,
-};
-
 enum class SessionState
 {
     LOGON,
@@ -43,7 +37,7 @@ struct SessionDelegate
 class Session
 {
 public:
-    Session(SessionSettings settings, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store);
+    Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store);
     ~Session();
 
     void start();
@@ -77,12 +71,12 @@ public:
 
     void runUpdate();
 
-    void send(Message& msg, SendCallback callback = SendCallback());
+    void send(Message& msg, SendCallback_T callback = SendCallback_T());
 
 private:
     bool load();
 
-    void populateMessage(Message& msg);
+    int populateMessage(Message& msg);
 
 private:
     void processMessage(const std::string& msg);
@@ -134,8 +128,6 @@ private:
     long m_reconnectInterval = 0;
 
     long m_testReqID = 0;
-
-    SessionType m_sessionType;
 
     CREATE_LOGGER("Session");
 };
