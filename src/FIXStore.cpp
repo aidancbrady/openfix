@@ -108,7 +108,7 @@ SessionData StoreHandle::load()
 
             // now read msg length
             int length;
-            if (!storeFile.read(reinterpret_cast<char*>(&seqNum), sizeof(seqNum)))
+            if (!storeFile.read(reinterpret_cast<char*>(&length), sizeof(length)))
                 throw FileStoreLoadError("Data file corrupted; unable to parse message length");
 
             // now read msg

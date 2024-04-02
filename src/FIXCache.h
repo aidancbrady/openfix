@@ -14,6 +14,9 @@ public:
 
     virtual void cache(int seqnum, const Message& msg) = 0;
 
+    using MessageConsumer = std::function<void(int, Message)>;
+    virtual void getMessages(int begin, int end, MessageConsumer consumer) = 0;
+
     virtual void setSenderSeqNum(int num) = 0;
     virtual void setTargetSeqNum(int num) = 0;
 
@@ -21,6 +24,7 @@ public:
     virtual int getTargetSeqNum() = 0;
 
     virtual int nextSenderSeqNum() = 0;
+    virtual int nextTargetSeqNum() = 0;
 
     virtual std::map<int, Message>& getInboundQueue() = 0;
 
@@ -34,6 +38,8 @@ public:
 
     void cache(int seqnum, const Message& msg) override;
 
+    void getMessages(int begin, int end, MessageConsumer consumer) override;
+
     void setSenderSeqNum(int num) override;
     void setTargetSeqNum(int num) override;
 
@@ -41,6 +47,7 @@ public:
     int getTargetSeqNum() override;
 
     int nextSenderSeqNum() override;
+    int nextTargetSeqNum() override;
 
     std::map<int, Message>& getInboundQueue() override;
 

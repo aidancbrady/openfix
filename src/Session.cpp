@@ -20,7 +20,7 @@ Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFI
     m_logonInterval = settings.getLong(SessionSettings::LOGON_INTERVAL);
     m_reconnectInterval = settings.getLong(SessionSettings::RECONNECT_INTERVAL);
     
-    m_network = std::make_shared<NetworkHandler>(m_settings, network, std::bind(&Session::processMessage, this, std::placeholders::_1));
+    m_network = std::make_shared<NetworkHandler>(m_settings, network, std::bind(&Session::onMessage, this, std::placeholders::_1));
 }
 
 Session::~Session()
@@ -38,7 +38,7 @@ void Session::stop()
     m_network->stop();
 }
 
-void Session::processMessage(const std::string& text)
+void Session::onMessage(const std::string& text)
 {
     // lock whenever we're processing a message
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -51,11 +51,27 @@ void Session::processMessage(const std::string& text)
         return;
     }
 
+    // parse message
     auto msg = m_dictionary->parse(m_settings, text);
-    auto msgType = msg.getHeader().getField(FIELD::MsgType);
 
     auto time = Utils::getEpochMillis();
     m_lastRecvHeartbeat = time;
+
+    processMessage(msg, time);
+
+    // handle inbound queue
+    auto& queue = m_cache->getInboundQueue();
+    while (!queue.empty() && getTargetSeqNum() == queue.begin()->first)
+    {
+        processMessage(queue.begin()->second, time);
+        queue.erase(queue.begin());
+    }
+}
+
+/* MUTEX LOCKED */
+void Session::processMessage(const Message& msg, long time)
+{
+    auto msgType = msg.getHeader().getField(FIELD::MsgType);
 
     if (!validateMessage(msg, time))
     {
@@ -83,9 +99,9 @@ void Session::processMessage(const std::string& text)
     {
         if (m_state == SessionState::LOGOUT)
         {
-            // TODO log successful logout
+            LOG_INFO("Successful logout");
             m_state = SessionState::LOGOUT;
-            // disconnect
+            m_network->disconnect();
             return;
         }
 
@@ -112,6 +128,10 @@ void Session::processMessage(const std::string& text)
     {
         handleResendRequest(msg);
     }
+    else if (msgType == MESSAGE::REJECT)
+    {
+        LOG_INFO("Received reject message: " << msg);
+    }
 }
 
 void Session::send(Message& msg, SendCallback_T callback)
@@ -127,6 +147,17 @@ void Session::runUpdate()
     std::lock_guard<std::mutex> lock(m_mutex);
     
     long time = Utils::getEpochMillis();
+
+    if (!m_network->isConnected())
+    {
+        if ((time - m_lastReconnect) >= m_reconnectInterval)
+        {
+            m_network->start();
+            m_lastReconnect = time;
+        }
+
+        return;
+    }
 
     if (m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
     {
@@ -177,8 +208,15 @@ void Session::handleLogon(const Message& msg)
     if (m_settings.SESSION_TYPE == SessionType::ACCEPTOR)
         m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt));
 
+    bool isPosDup = msg.getBody().tryGetBool(FIELD::PosDupFlag);
+    if (isPosDup && !msg.getBody().has(FIELD::OrigSendingTime))
+    {
+        sendReject(msg, SessionRejectReason::RequiredTagMissing);
+        return;
+    }
+
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
-    if (seqNum < m_cache->getTargetSeqNum())
+    if (!isPosDup && seqNum < m_cache->getTargetSeqNum())
     {
         logout("MsgSeqNum too low, expected " + m_cache->getTargetSeqNum(), true);
         return;
@@ -198,14 +236,52 @@ void Session::handleResendRequest(const Message& msg)
     int beginSeqNo = std::stoi(msg.getBody().getField(FIELD::BeginSeqNo));
     int endSeqNo = std::stoi(msg.getBody().getField(FIELD::EndSeqNo));
 
-    LOG_INFO(beginSeqNo << endSeqNo);
+    LOG_INFO("Received resend request from " << beginSeqNo << " to " << endSeqNo);
+
+    // cap at our senderseqnum
+    endSeqNo = std::min(endSeqNo, getSenderSeqNum());
+
+    int ptr = beginSeqNo;
+    m_cache->getMessages(beginSeqNo, endSeqNo, [&](int seqno, Message msg){
+        // skip session-level messages
+        if (MESSAGE::SESSION_MSGS.count(msg.getHeader().getField(FIELD::MsgType)))
+            return;
+
+        // send gapfill if we need to
+        if (seqno != ptr)
+            sendSequenceReset(seqno);
+
+        msg.getHeader().setField(FIELD::PosDupFlag, "Y");
+        msg.getHeader().setField(FIELD::OrigSendingTime, msg.getHeader().getField(FIELD::SendingTime));
+        msg.getHeader().setField(FIELD::SendingTime, Utils::getUTCTimestamp());
+        
+        m_network->send({msg.toString(), {}});
+        ptr = seqno;
+    });
+
+    // send final gapfill if we need to
+    if (ptr < endSeqNo)
+        sendSequenceReset(endSeqNo);
 }
 
 void Session::handleSequenceReset(const Message& msg)
 {
     bool gapFill = msg.getBody().tryGetBool(FIELD::GapFillFlag);
     int newSeqNum = std::stoi(msg.getBody().getField(FIELD::NewSeqNo));
-    //int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
+    int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
+
+    if (newSeqNum <= seqNum)
+    {
+        sendReject(msg, SessionRejectReason::IncorrectValueForTag, "Attempt to lower sequence number, invalid value NewSeqNo(36)=" + std::to_string(newSeqNum));
+        return;
+    }
+
+    if (newSeqNum < m_cache->getTargetSeqNum())
+    {
+        logout("Unable to set SeqNum to " + std::to_string(newSeqNum) + ", next expected is " 
+            + std::to_string(m_cache->getTargetSeqNum()), true);
+        return;
+    }
 
     // queue out-of-sequence gapfills
     if (gapFill && !validateSeqNum(msg))
@@ -221,6 +297,8 @@ void Session::sendLogon()
     msg.getBody().setField(FIELD::HeartBtInt, std::to_string(m_heartbeatInterval));
     msg.getBody().setField(FIELD::EncryptMethod, "0");
     send(msg);
+
+    m_lastLogon = Utils::getEpochMillis();
 }
 
 void Session::sendLogout(const std::string& reason, bool terminate)
@@ -245,6 +323,16 @@ void Session::sendResendRequest(int from, int to)
     send(msg);
 }
 
+void Session::sendSequenceReset(int seqno, bool gapfill)
+{
+    Message msg;
+    msg.getHeader().setField(FIELD::MsgType, MESSAGE::SEQUENCE_RESET);
+    msg.getBody().setField(FIELD::NewSeqNo, std::to_string(seqno));
+    if (gapfill)
+        msg.getBody().setField(FIELD::GapFillFlag, "Y");
+    send(msg);
+}
+
 void Session::logout(const std::string& reason, bool terminate)
 {
     if (terminate)
@@ -262,6 +350,8 @@ void Session::sendHeartbeat(long time, std::string testReqID)
     if (!testReqID.empty())
         msg.getBody().setField(FIELD::TestReqID, testReqID);
     send(msg);
+
+    m_lastSentHeartbeat = Utils::getEpochMillis();
 }
 
 void Session::sendTestRequest()
@@ -272,12 +362,14 @@ void Session::sendTestRequest()
     send(msg);
 }
 
-void Session::sendReject(const Message& rejectedMsg, SessionRejectReason reason)
+void Session::sendReject(const Message& rejectedMsg, SessionRejectReason reason, std::string text)
 {
     Message msg;
     msg.getHeader().setField(FIELD::MsgType, MESSAGE::REJECT);
     msg.getBody().setField(FIELD::RefSeqNum, rejectedMsg.getHeader().getField(FIELD::MsgSeqNum));
     msg.getBody().setField(FIELD::SessionRejectReason, std::to_string(static_cast<int>(reason)));
+    if (!text.empty())
+        msg.getBody().setField(FIELD::Text, text);
     send(msg);
 }
 
@@ -373,19 +465,23 @@ bool Session::validateSeqNum(const Message& msg)
 {
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
     if (seqNum == getTargetSeqNum())
+    {
+        m_cache->nextTargetSeqNum();
         return true;
+    }
 
     if (seqNum < getTargetSeqNum())
     {
         logout("MsgSeqNum too low, expected " + m_cache->getTargetSeqNum(), true);
     }
-    else
+    else if (seqNum)
     {
         // queue this message and send resend request for gap
         m_cache->getInboundQueue()[seqNum] = msg;
         sendResendRequest(getTargetSeqNum(), seqNum);
     }
 
+    m_cache->nextTargetSeqNum();
     return false;
 }
 

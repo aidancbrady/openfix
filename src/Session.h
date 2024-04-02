@@ -79,7 +79,8 @@ private:
     int populateMessage(Message& msg);
 
 private:
-    void processMessage(const std::string& msg);
+    void onMessage(const std::string& msg);
+    void processMessage(const Message& msg, long time);
 
     bool validateMessage(const Message& msg, long time);
     bool validateSeqNum(const Message& msg);
@@ -95,8 +96,9 @@ private:
     void sendLogon();
     void sendLogout(const std::string& reason, bool terminate);
     void sendResendRequest(int from, int to);
+    void sendSequenceReset(int seqno, bool gapfill = true);
     void sendTestRequest();
-    void sendReject(const Message& msg, SessionRejectReason reason);
+    void sendReject(const Message& msg, SessionRejectReason reason, std::string text = "");
 
 private:
     SessionSettings m_settings;

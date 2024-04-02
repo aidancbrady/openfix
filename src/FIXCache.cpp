@@ -59,11 +59,28 @@ int MemoryCache::nextSenderSeqNum()
     return next;
 }
 
+int MemoryCache::nextTargetSeqNum()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    int next = getTargetSeqNum() + 1;
+    setTargetSeqNum(next);
+    return next;
+}
+
 void MemoryCache::cache(int seqnum, const Message& msg)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_messages[seqnum] = msg;
     m_store.store(seqnum, msg.toString());
+}
+
+void MemoryCache::getMessages(int begin, int end, MessageConsumer consumer)
+{
+    auto it = m_messages.lower_bound(begin);
+    for (; it != m_messages.end() && (end == 0 || it->first <= end); ++it)
+    {
+        consumer(it->first, it->second);
+    }
 }
 
 std::map<int, Message>& MemoryCache::getInboundQueue()

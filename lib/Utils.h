@@ -28,4 +28,9 @@ struct Utils
 
         return ms;
     }
+
+    inline static std::string getUTCTimestamp()
+    {
+        return "";
+    }
 };
