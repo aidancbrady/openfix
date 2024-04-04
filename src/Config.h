@@ -16,6 +16,7 @@ using SessionID_T = std::string;
 
 enum class SessionType
 {
+    UNKNOWN,
     ACCEPTOR,
     INITIATOR,
 };
@@ -133,7 +134,7 @@ protected:
         return {name, defaultValue, defaults().m_doubles.size() - 1};
     }
 
-private:
+protected:
     struct Defaults
     {
         std::unordered_map<std::string, std::pair<std::type_index, size_t>> m_fields;
@@ -164,33 +165,33 @@ class StaticConfig : public Config<Class>
 public:
     static const std::string& getString(const BaseConfigItem<Class, std::string>& item)
     {
-        return instance().getString(item);
+        return instance().Config<Class>::getString(item);
     }
 
     static long getLong(const BaseConfigItem<Class, long>& item)
     {
-        return instance().getLong(item);
+        return instance().Config<Class>::getLong(item);
     }
 
     static bool getBool(const BaseConfigItem<Class, bool>& item)
     {
-        return instance().getBool(item);
+        return instance().Config<Class>::getBool(item);
     }
 
     static double getDouble(const BaseConfigItem<Class, double>& item)
     {
-        return instance().getDouble(item);
+        return instance().Config<Class>::getDouble(item);
     }
 
     static void load(const std::unordered_map<std::string, std::string>& settings)
     {
-        instance().load(settings);
+        instance().Config<Class>::load(settings);
     }
 
 private:
-    static StaticConfig<Class> instance()
+    static StaticConfig<Class>& instance()
     {
-        StaticConfig<Class> instance;
+        static StaticConfig<Class> instance;
         return instance;
     }
 };
@@ -212,10 +213,7 @@ struct PlatformSettings : StaticConfig<PlatformSettings>
 
 struct SessionSettings : Config<SessionSettings>
 {
-    SessionSettings() 
-        : SESSION_ID(getString(SENDER_COMP_ID) + ":" + getString(TARGET_COMP_ID))
-        , SESSION_TYPE(getSessionType())
-    {}
+    SessionSettings() {}
 
     static inline ConfigItem<std::string> BEGIN_STRING = createString("BeginString");
 
@@ -238,6 +236,8 @@ struct SessionSettings : Config<SessionSettings>
     static inline ConfigItem<std::string> CONNECT_HOST = createString("ConnectHost");
     static inline ConfigItem<long> CONNECT_PORT = createLong("ConnectPort");
 
+    static inline ConfigItem<long> CONNECT_TIMEOUT = createLong("ConnectTimeout", 5000L);
+
     static inline ConfigItem<long> HEARTBEAT_INTERVAL = createLong("HeartbeatInterval", 10L);
     static inline ConfigItem<long> LOGON_INTERVAL = createLong("LogonInterval", 10L);
     static inline ConfigItem<long> RECONNECT_INTERVAL = createLong("ReconnectInterval", 10L);
@@ -245,11 +245,9 @@ struct SessionSettings : Config<SessionSettings>
     static inline ConfigItem<double> TEST_REQUEST_THRESHOLD = createDouble("TestRequestThreshold", 2.0);
     static inline ConfigItem<long> SENDING_TIME_THRESHOLD = createLong("SendingTimeThreshold", 10L);
 
-    const std::string SESSION_ID;
-    const SessionType SESSION_TYPE;
+    static inline ConfigItem<std::string> SESSION_TYPE_STR = createString("SessionType");
 
-private:
-    SessionType getSessionType()
+    SessionType getSessionType() const
     {
         std::string tmp = getString(SESSION_TYPE_STR);
         if (strcasecmp(tmp.c_str(), "initiator") == 0)
@@ -260,5 +258,11 @@ private:
             throw MisconfiguredSessionError("Unknown session type: " + tmp);
     }
 
-    static inline ConfigItem<std::string> SESSION_TYPE_STR = createString("SessionType");
+    SessionID_T getSessionID() const
+    {
+        return getString(SENDER_COMP_ID) + ":" + getString(TARGET_COMP_ID);
+    }
+
+private:
+    SessionType SESSION_TYPE = SessionType::UNKNOWN;
 };

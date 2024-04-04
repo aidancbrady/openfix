@@ -145,6 +145,7 @@ void Session::runUpdate()
 {
     // lock during our update loop
     std::lock_guard<std::mutex> lock(m_mutex);
+    LOG_TRACE("session update " << m_settings.getSessionID() << " " << m_network->isConnected());
     
     long time = Utils::getEpochMillis();
 
@@ -205,7 +206,7 @@ void Session::handleLogon(const Message& msg)
         return;
     }
 
-    if (m_settings.SESSION_TYPE == SessionType::ACCEPTOR)
+    if (m_settings.getSessionType() == SessionType::ACCEPTOR)
         m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt));
 
     bool isPosDup = msg.getBody().tryGetBool(FIELD::PosDupFlag);
@@ -396,8 +397,10 @@ int Session::populateMessage(Message& msg)
 {
     int seqnum = m_cache->nextSenderSeqNum();
 
+    msg.getHeader().setField(FIELD::BeginString, m_settings.getString(SessionSettings::BEGIN_STRING));
     msg.getHeader().setField(FIELD::SenderCompID, m_settings.getString(SessionSettings::SENDER_COMP_ID));
     msg.getHeader().setField(FIELD::TargetCompID, m_settings.getString(SessionSettings::TARGET_COMP_ID));
+    msg.getHeader().setField(FIELD::SendingTime, Utils::getUTCTimestamp());
     msg.getHeader().setField(FIELD::MsgSeqNum, std::to_string(seqnum));
 
     return seqnum;

@@ -2,6 +2,7 @@
 
 #include "Message.h"
 #include "Fields.h"
+#include <openfix/Utils.h>
 
 #include <cerrno>
 #include <iostream>
@@ -14,16 +15,19 @@
 
 #include <unistd.h>
 #include <netdb.h>
+#include <poll.h>
+#include <fcntl.h>
 #include <string.h>
 
 #define EVENT_BUF_SIZE 256
 #define ACCEPTOR_BACKLOG 16
 
-const std::string BEGIN_STRING_TAG = std::to_string(FIELD::BeginString) + std::to_string(TAG_ASSIGNMENT_CHAR);
-const std::string BODY_LENGTH_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELD::BodyLength) + std::to_string(TAG_ASSIGNMENT_CHAR);
-const std::string SENDER_COMP_ID_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELD::SenderCompID) + std::to_string(TAG_ASSIGNMENT_CHAR);
-const std::string SENDER_SUB_ID_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELD::SenderSubID) + std::to_string(TAG_ASSIGNMENT_CHAR);
-const std::string CHECKSUM_TAG = std::to_string(INTERNAL_SOH_CHAR) + std::to_string(FIELD::CheckSum) + std::to_string(TAG_ASSIGNMENT_CHAR);
+const std::string BEGIN_STRING_TAG = std::to_string(FIELD::BeginString) + TAG_ASSIGNMENT_CHAR;
+const std::string BODY_LENGTH_TAG = std::to_string(FIELD::BodyLength);
+const std::string SENDER_COMP_ID_TAG = std::to_string(FIELD::SenderCompID);
+const std::string TARGET_COMP_ID_TAG = std::to_string(FIELD::TargetCompID);
+const std::string SENDER_SUB_ID_TAG = std::to_string(FIELD::SenderSubID);
+const std::string CHECKSUM_TAG = std::to_string(FIELD::CheckSum);
 
 Network::Network() : m_epollFD(-1), m_running(false)
 {
@@ -31,8 +35,32 @@ Network::Network() : m_epollFD(-1), m_running(false)
     m_readerThreadCount = PlatformSettings::getLong(PlatformSettings::READER_THREADS);
 }
 
+bool try_make_non_blocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) 
+    {
+        LOG_ERROR("NetUtils", "Error getting flags from socket: " << strerror(errno));
+        return false;
+    }
+
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) 
+    {
+        LOG_ERROR("NetUtils", "Error setting non-blocking flag on socket: " << strerror(errno));
+        return false;
+    }
+
+    return true;
+}
+
 void Network::start()
 {
+    if (m_running.load(std::memory_order_acquire))
+        return;
+    m_running.store(true, std::memory_order_release);
+
+    LOG_INFO("Starting...");
+
     m_epollFD = epoll_create1(0);
     if (m_epollFD == -1)
     {
@@ -44,12 +72,20 @@ void Network::start()
 
     for (size_t i = 0; i < m_writerThreadCount; ++i)
         m_writerThreads.push_back(std::make_unique<WriterThread>(*this));
+    
+    LOG_INFO("Started, now running.");
 
-    run();
+    m_thread = std::thread([&]{ run(); });
 }
 
 void Network::stop()
 {
+    if (!m_running.load(std::memory_order_acquire))
+        return;
+    m_running.store(false, std::memory_order_release);
+
+    LOG_INFO("Stopping...");
+
     m_running.store(false, std::memory_order_release);
 
     // wait for all threads to timeout and terminate
@@ -65,9 +101,13 @@ void Network::stop()
 
     m_readerThreads.clear();
     m_writerThreads.clear();
+
+    m_thread.join();
     
     // finally, close epoll FD
     close(m_epollFD);
+
+    LOG_INFO("Stopped.");
 }
 
 bool Network::connect(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler)
@@ -78,6 +118,8 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
     int fd = 0;
 
     struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    
     struct addrinfo* ret;
 
     hints.ai_family = AF_UNSPEC; // allow ipv6
@@ -91,8 +133,13 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
         return false;
     }
 
+    long timeout = settings.getLong(SessionSettings::CONNECT_TIMEOUT);
+    bool connected = false;
+
     for (struct addrinfo* addr = ret; addr != nullptr; addr = addr->ai_next)
     {
+        LOG_TRACE("connect iteration");
+
         fd = ::socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
         if (fd == -1)
         {
@@ -100,10 +147,43 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
             continue;
         }
 
-        if (::connect(fd, addr->ai_addr, addr->ai_addrlen) < 0)
-            break;
+        if (!try_make_non_blocking(fd))
+        {
+            close(fd);
+            continue;
+        }
 
-        err = errno;
+        int res = ::connect(fd, addr->ai_addr, addr->ai_addrlen);
+        if (res < 0 && errno == EINPROGRESS)
+        {
+            struct pollfd pfd;
+            memset(&pfd, 0, sizeof(pfd));
+            pfd.fd = fd;
+            pfd.events = POLLOUT;
+
+            res = poll(&pfd, 1, timeout);
+            if (res > 0)
+            {
+                int so_error;
+                socklen_t len = sizeof(so_error);
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len);
+                if (so_error == 0)
+                {
+                    char host[NI_MAXHOST], service[NI_MAXSERV];
+                    if (getnameinfo(addr->ai_addr, addr->ai_addrlen, host, sizeof(host), service, sizeof(service), NI_NUMERICHOST | NI_NUMERICSERV) == 0) 
+                    {
+                        LOG_INFO("Successful connection to " << host << ":" << service);
+                    } 
+                    else 
+                    {
+                        LOG_WARN("Successful connection, but cannot resolve address to string...");
+                    }
+
+                    connected = true;
+                    break;
+                }
+            }
+        }
 
         close(fd);
         fd = -1;
@@ -111,19 +191,23 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
 
     ::freeaddrinfo(ret);
 
-    if (!addClient(fd))
+    if (connected && !m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd))
     {
         close(fd);
         return false;
     }
 
-    if (!m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd))
-    {
-        close(fd);
-        return false;
-    }
+    return connected;
+}
 
-    return true;
+bool Network::hasAcceptor(const SessionSettings& settings)
+{
+    std::lock_guard lock(m_mutex);
+    int port = settings.getLong(SessionSettings::ACCEPT_PORT);
+    auto it = m_acceptors.find(port);
+    if (it != m_acceptors.end())
+        return m_readerThreads[it->second % m_readerThreadCount]->hasAcceptor(settings.getSessionID(), it->second);
+    return false;
 }
 
 bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler)
@@ -137,11 +221,13 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
     // see if we already have a live fd associated with this accept port
     if (fd == 0)
     {
-        if ((fd = ::socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP)) < 0)
+        if ((fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
         {
             LOG_ERROR("Unable to create socket: " << strerror(errno));
             return false;
         }
+
+        LOG_DEBUG("Created server socket on port " << port << " with fd=" << fd);
 
         struct sockaddr_in addr;
         addr.sin_family = AF_UNSPEC; // support ipv4
@@ -177,7 +263,7 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
         m_acceptors[port] = fd;
     }
 
-    m_readerThreads[fd % m_readerThreadCount]->addAcceptor(handler, settings.SESSION_ID, fd);
+    m_readerThreads[fd % m_readerThreadCount]->addAcceptor(handler, settings.getSessionID(), fd);
     return true;
 }
 
@@ -195,7 +281,7 @@ bool Network::removeAcceptor(const SessionSettings& settings)
         return false;
     }
 
-    m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.SESSION_ID, port);
+    m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.getSessionID(), port);
 
     // remove from port->fd map
     m_acceptors.erase(port);
@@ -208,23 +294,28 @@ void Network::run()
     struct epoll_event events[EVENT_BUF_SIZE];
 
     int numEvents;
-    long timeout = PlatformSettings::getLong(PlatformSettings::EPOLL_TIMEOUT) * 1000;
+    long timeout = PlatformSettings::getLong(PlatformSettings::EPOLL_TIMEOUT);
 
     while (m_running)
     {
         while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) > 0)
         {
+            LOG_DEBUG("received " << numEvents << " events");
+
             for (int i = 0; i < numEvents; i++) 
             {
                 int fd = events[i].data.fd;
 
                 if (events[i].events & EPOLLIN)
                 {
+                    LOG_TRACE("data callback for fd=" << fd);
+
                     // data received
                     m_readerThreads[fd % m_readerThreadCount]->queue(fd);
                 }
                 else if (events[i].events & EPOLLRDHUP)
                 {
+                    LOG_INFO("disconnect callback for fd=" << fd);
                     // connection hangup
                     m_readerThreads[fd % m_readerThreadCount]->disconnect(fd);
                 }
@@ -233,17 +324,46 @@ void Network::run()
     }
 }
 
-bool Network::addClient(int fd)
+bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
 {
+    struct sockaddr_in addr;
+    socklen_t addrlen = sizeof(addr);
+    int fd = ::accept(server_fd, reinterpret_cast<struct sockaddr*>(&addr), &addrlen);
+    if (fd < 0)
+    {
+        LOG_WARN("Failed to accept new socket: " << strerror(errno));
+        return -1;
+    }
+
+    if (!try_make_non_blocking(fd))
+    {
+        close(fd);
+        return false;
+    }
+
+    char ip[INET_ADDRSTRLEN + 1];
+    if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) 
+    {
+        LOG_WARN("Failed to parse incoming connection IP address: " << ::strerror(errno));
+        close(fd);
+        return false;
+    }
+
+    std::string address = std::string(ip) + ":" + std::to_string(::ntohs(addr.sin_port));
+
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
     event.data.fd = fd;
 
     if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
     {
-        LOG_WARN("Failed to register connection with epoll");
+        LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
+        close(fd);
         return false;
     }
+
+    LOG_INFO("Accepted new connection from fd=" << fd << " on server fd=" << server_fd << ": " << address);
+    m_readerThreads[fd % m_readerThreads.size()]->accept(fd, acceptor);
 
     return true;
 }
@@ -256,14 +376,17 @@ void ReaderThread::queue(int fd)
 {
     // lock as we insert to ensure data change is propogated to reader thread
     // we don't need to lock as we process
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_readyFDs.push(fd);
+    {
+        std::lock_guard lock(m_mutex);
+        m_readyFDs.push(fd);
+    }
+
     m_cv.notify_one();
 }
 
 void ReaderThread::disconnect(int fd)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     m_buffer.clear(fd);
     auto it = m_connections.find(fd);
     if (m_connections.find(fd) != m_connections.end())
@@ -284,8 +407,9 @@ void ReaderThread::process()
 {
     while (m_running.load(std::memory_order_acquire))
     {
-        std::unique_lock<std::mutex> lock(m_mutex);
+        std::unique_lock lock(m_mutex);
         m_cv.wait(lock, [&](){ return !m_running.load() || !m_readyFDs.empty(); });
+        lock.unlock();
 
         if (!m_running.load(std::memory_order_acquire))
             break;
@@ -294,6 +418,7 @@ void ReaderThread::process()
         if (!m_readyFDs.try_pop(fd))
             continue;
 
+        LOG_TRACE("processing fd=" << fd);
         process(fd);
     }
 }
@@ -301,13 +426,15 @@ void ReaderThread::process()
 void ReaderThread::process(int fd)
 {
     // lock here as we're touching connection maps
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
 
     // known connections
     {
         auto it = m_connections.find(fd);
         if (it != m_connections.end())
         {
+            LOG_TRACE("Handling data for known connection on fd=" << fd);
+
             auto msgs = m_buffer.read(fd);
             for (const auto& msg : msgs)
                 it->second->processMessage(msg);
@@ -320,13 +447,8 @@ void ReaderThread::process(int fd)
         auto it = m_acceptorSockets.find(fd);
         if (it != m_acceptorSockets.end())
         {
-            std::string address;
-            if (accept(fd, address))
-            {
-                m_unknownConnections[fd] = it->second;
-                LOG_INFO("Accepted new connection: " << address);
-            }
-
+            LOG_TRACE("Attempting to accept connection on accept socket fd=" << fd);
+            m_network.accept(fd, it->second);
             return;
         }
     }
@@ -336,37 +458,36 @@ void ReaderThread::process(int fd)
         auto it = m_unknownConnections.find(fd);
         if (it != m_unknownConnections.end())
         {
+            LOG_TRACE("Handling data for unknown connection on fd=" << fd);
+            auto acceptor = it->second;
+
             auto msgs = m_buffer.read(fd);
             if (!msgs.empty())
             {
                 // this connection is either invalid or will be known
                 m_unknownConnections.erase(fd);
-
                 const auto& msg = msgs[0];
-                size_t ptr = msg.find(SENDER_COMP_ID_TAG);
-                if (ptr == std::string::npos)
+
+                auto sender_comp = Utils::getTagValue(msg, SENDER_COMP_ID_TAG);
+                if (sender_comp.first.empty())
                 {
                     LOG_ERROR("Received message without SenderCompID");
                     close(fd);
                     return;
                 }
 
-                size_t end = msg.find(INTERNAL_SOH_CHAR, ptr);
-                auto cpty = msg.substr(ptr + SENDER_COMP_ID_TAG.size(), end - ptr + SENDER_COMP_ID_TAG.size());
-
-                ptr = msg.find(SENDER_SUB_ID_TAG);
-                if (ptr != std::string::npos)
+                auto target_comp = Utils::getTagValue(msg, TARGET_COMP_ID_TAG, sender_comp.second);
+                if (target_comp.first.empty())
                 {
-                    end = msg.find(INTERNAL_SOH_CHAR, ptr);
-                    cpty.append(":" + msg.substr(ptr + SENDER_SUB_ID_TAG.size(), end - ptr + SENDER_SUB_ID_TAG.size()));
-                }
-                else
-                {
-                    cpty.append(":*");
+                    LOG_ERROR("Received message without TargetCompID");
+                    close(fd);
+                    return;
                 }
 
-                auto consumerIt = it->second->m_sessions.find(cpty);
-                if (consumerIt == it->second->m_sessions.end())
+                // flip as this is from their perspective
+                auto cpty = target_comp.first + ':' + sender_comp.first;
+                auto consumerIt = acceptor->m_sessions.find(cpty);
+                if (consumerIt == acceptor->m_sessions.end())
                 {
                     LOG_ERROR("Received connection from unknown counterparty: " << cpty);
                     ::close(fd);
@@ -387,40 +508,19 @@ void ReaderThread::process(int fd)
     LOG_WARN("Received I/O event for unknown fd: " << fd);
 }
 
-bool ReaderThread::accept(int serverFD, std::string& address)
+void ReaderThread::accept(int fd, const std::shared_ptr<Acceptor>& acceptor)
 {
-    struct sockaddr_in addr;
-    socklen_t addrlen = sizeof(addr);
-    int fd = ::accept(serverFD, reinterpret_cast<struct sockaddr*>(&addr), &addrlen);
-    if (fd < 0)
-    {
-        LOG_WARN("Failed to accept new socket: " << strerror(errno));
-        return false;
-    }
-
-    char ip[INET_ADDRSTRLEN + 1];
-    if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) 
-    {
-        LOG_WARN("Failed to parse incoming connection IP address: " << ::strerror(errno));
-        close(fd);
-        return false;
-    }
-
-    address = std::string(ip) + ":" + std::to_string(::ntohs(addr.sin_port));
-
-    if (!m_network.addClient(fd))
-    {
-        close(fd);
-        return false;
-    }
-
-    return true;
+    std::lock_guard lock(m_mutex);
+    m_unknownConnections[fd] = acceptor;
 }
 
 void ReaderThread::stop()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_running.store(false, std::memory_order_release);
+    {
+        std::lock_guard lock(m_mutex);
+        m_running.store(false, std::memory_order_release);
+    }
+
     m_cv.notify_one();
 
     // close open connections
@@ -432,6 +532,12 @@ void ReaderThread::stop()
     // close acceptor sockets
     for (const auto& [k, _] : m_acceptorSockets)
         close(k);
+
+    m_connections.clear();
+    m_unknownConnections.clear();
+    m_acceptorSockets.clear();
+
+    m_buffer.clear();
 }
 
 bool ReaderThread::addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd)
@@ -443,17 +549,33 @@ bool ReaderThread::addConnection(const std::shared_ptr<NetworkHandler>& handler,
     return true;
 }
 
+bool ReaderThread::hasAcceptor(const SessionID_T sessionID, int fd)
+{
+    std::lock_guard lock(m_mutex);
+    auto it = m_acceptorSockets.find(fd);
+    if (it != m_acceptorSockets.end())
+        return it->second->m_sessions.find(sessionID) != it->second->m_sessions.end();
+    return false;
+}
+
 void ReaderThread::addAcceptor(const std::shared_ptr<NetworkHandler>& handler, const SessionID_T sessionID, int fd)
 {
     std::lock_guard lock(m_mutex);
-    m_acceptorSockets[fd]->m_sessions[sessionID] = handler;
+    auto it = m_acceptorSockets.find(fd);
+    if (it == m_acceptorSockets.end())
+        it = m_acceptorSockets.emplace(fd, std::make_shared<Acceptor>()).first;
+    it->second->m_sessions[sessionID] = handler;
+    LOG_DEBUG("Created acceptor socket for " << sessionID << " with fd=" << fd);
 }
 
 void ReaderThread::removeAcceptor(const SessionID_T sessionID, int fd)
 {
     std::lock_guard lock(m_mutex);
-    m_acceptorSockets[fd]->m_sessions.erase(sessionID);
-    if (m_acceptorSockets[fd]->m_sessions.empty())
+    auto it = m_acceptorSockets.find(fd);
+    if (it == m_acceptorSockets.end())
+        return;
+    it->second->m_sessions.erase(sessionID);
+    if (it->second->m_sessions.empty())
         m_acceptorSockets.erase(fd);
 }
 
@@ -470,20 +592,23 @@ std::vector<std::string> ReadBuffer::read(int fd)
         it = m_bufferMap.insert({fd, ""}).first;
     std::string& buffer = it->second;
 
+    // TODO handle errors here and potentially move to ET mode
     int bytes = ::recv(fd, m_buffer, sizeof(m_buffer), 0);
     if (bytes <= 0)
         ; // TODO error
     buffer.append(m_buffer, bytes);
 
+    LOG_INFO(buffer);
+
     // parse all the messages we can
-    size_t ptr = 0, bodyLengthStart = 0;
-    int bodyLength = 0;
+    size_t ptr = 0;
     while (true)
     {
         // find beginning of message
         ptr = buffer.find(BEGIN_STRING_TAG, ptr);
         if (ptr == std::string::npos)
             break;
+        LOG_INFO("begin start: " << ptr);
         if (ptr > 0)
         {
             LOG_WARN("Discarding text received in buffer: " << buffer.substr(0, ptr));
@@ -492,18 +617,18 @@ std::vector<std::string> ReadBuffer::read(int fd)
         }
         
         // find start of bodylength tag
-        bodyLengthStart = buffer.find(BODY_LENGTH_TAG, ptr);
-        if (bodyLengthStart == std::string::npos)
+        auto tag_it = Utils::getTagValue(buffer, BODY_LENGTH_TAG, ptr);
+        if (tag_it.first.empty())
             break;
+        ptr = tag_it.second;
 
-        ptr = buffer.find(INTERNAL_SOH_CHAR, bodyLengthStart);
-        if (ptr == std::string::npos)
-            break;
+        LOG_INFO("bodylength: " << tag_it.first);
 
         try {
-            bodyLength = std::stoi(buffer.substr(bodyLengthStart + BODY_LENGTH_TAG.size(), ptr - bodyLengthStart + BODY_LENGTH_TAG.size()));
+            int bodyLength = std::stoi(tag_it.first);
             if (bodyLength < 0)
                 throw std::runtime_error("Negative body length");
+            ptr += bodyLength;
         } catch (...) {
             LOG_WARN("Unable to parse message, bad body length: " << buffer);
             // corrupted message, move up the buffer and hopefully splice it next round
@@ -512,12 +637,11 @@ std::vector<std::string> ReadBuffer::read(int fd)
         }
             
         // find the checksum
-        ptr = buffer.find(CHECKSUM_TAG, ptr);
-        if (ptr == std::string::npos)
+        tag_it = Utils::getTagValue(buffer, CHECKSUM_TAG, ptr);
+        if (tag_it.first.empty())
             break;
-        ptr = buffer.find(INTERNAL_SOH_CHAR, ptr);
-        if (ptr == std::string::npos)
-            break;
+        ptr = tag_it.second;
+        LOG_INFO("checksum: " << tag_it.first);
         // completed message!
         ret.push_back(buffer.substr(0, ptr + 1));
         buffer.erase(0, ptr + 1);
@@ -536,6 +660,7 @@ void WriterThread::process()
     {
         std::unique_lock lock(m_mutex);
         m_cv.wait(lock);
+        lock.unlock();
 
         if (!m_running.load(std::memory_order_acquire))
             return;
@@ -543,7 +668,7 @@ void WriterThread::process()
         for (auto& [fd, buffer] : m_bufferMap)
         {
             {
-                std::lock_guard<std::mutex> lock(m_mutex);
+                std::lock_guard lock(m_mutex);
                 if (!buffer.m_queue.empty())
                     buffer.m_queue.swap(buffer.m_buffer);
             }
@@ -562,7 +687,7 @@ void WriterThread::process()
 
             // process callbacks
             SendCallback_T callback;
-            while (buffer.m_sendCallbacks.try_pop(callback))
+            while (buffer.m_sendCallbacks.try_pop(callback) && callback)
                 callback();
 
             buffer.m_buffer.clear();
@@ -572,16 +697,22 @@ void WriterThread::process()
 
 void WriterThread::send(int fd, const MsgPacket& msg)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_bufferMap[fd].m_queue.append(msg.m_msg);
-    m_bufferMap[fd].m_sendCallbacks.push(std::move(msg.m_callback));
+    {
+        std::lock_guard lock(m_mutex);
+        m_bufferMap[fd].m_queue.append(msg.m_msg);
+        m_bufferMap[fd].m_sendCallbacks.push(std::move(msg.m_callback));
+    }
+    
     m_cv.notify_one();
 }
 
 void WriterThread::stop()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_running.store(false, std::memory_order_release);
+    {
+        std::lock_guard lock(m_mutex);
+        m_running.store(false, std::memory_order_release);
+    }
+
     m_cv.notify_one();
 }
 
@@ -596,6 +727,7 @@ void ConnectionHandle::disconnect()
 
 void ConnectionHandle::send(const MsgPacket& msg)
 {
+    LOG_TRACE("ConnectionHandle", "Attempting to send packet: " << msg.m_msg);
     m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->send(m_fd, msg);
 }
 
@@ -605,13 +737,28 @@ void ConnectionHandle::send(const MsgPacket& msg)
 
 void NetworkHandler::start()
 {
-    if (m_settings.SESSION_TYPE == SessionType::INITIATOR)
+    if (m_settings.getSessionType() == SessionType::INITIATOR)
     {
-        m_network.connect(m_settings, shared_from_this());
+        LOG_INFO("Attempting to connect...");
+        bool ret = m_network.connect(m_settings, shared_from_this());
+        if (ret) {
+            LOG_INFO("Successful connection.");
+        } else {
+            LOG_DEBUG("Unable to connect, will retry after next interval.");
+        }
     }
-    else if (m_settings.SESSION_TYPE == SessionType::ACCEPTOR)
+    else if (m_settings.getSessionType() == SessionType::ACCEPTOR)
     {
-        m_network.addAcceptor(m_settings, shared_from_this());
+        if (!m_network.hasAcceptor(m_settings))
+        {
+            LOG_INFO("Attempting to create acceptor...");
+            bool ret = m_network.addAcceptor(m_settings, shared_from_this());
+            if (ret) {
+                LOG_INFO("Successfully created acceptor.");
+            } else {
+                LOG_INFO("Unable to create acceptor.");
+            }
+        }
     }
 }
 
@@ -621,7 +768,7 @@ void NetworkHandler::stop()
     disconnect();
 
     // shut down if we're an acceptor
-    if (m_settings.SESSION_TYPE == SessionType::ACCEPTOR)
+    if (m_settings.getSessionType() == SessionType::ACCEPTOR)
     {
         m_network.removeAcceptor(m_settings);
     }
@@ -634,26 +781,26 @@ void NetworkHandler::processMessage(const std::string& msg)
 
 void NetworkHandler::send(const MsgPacket& msg)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     if (m_connection)
         m_connection->send(msg);
 }
 
 void NetworkHandler::disconnect()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     if (m_connection)
         m_connection->disconnect();
 }
 
 void NetworkHandler::setConnection(std::shared_ptr<ConnectionHandle> connection)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     m_connection = connection;
 }
 
 bool NetworkHandler::isConnected()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     return m_connection != nullptr;
 }

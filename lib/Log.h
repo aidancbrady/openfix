@@ -15,7 +15,7 @@ enum class LogLevel
 class LogSettings
 {
 public:
-    static inline LogLevel LOG_LEVEL = LogLevel::INFO;
+    static inline LogLevel LOG_LEVEL = LogLevel::TRACE;
 };
 
 class Logger
@@ -49,5 +49,5 @@ private:
 #define __LOG_EXPLICIT(logger, msg, level) __LOG_IMPL(logger, msg, level)
 
 #define __LOG_IMPL(logger, msg, level)           \
-    if (LogLevel::level >= LogSettings::LOG_LEVEL)    \
-        std::cout << "[" << logger << "] " << msg << std::endl;
+    { if (LogLevel::level >= LogSettings::LOG_LEVEL)    \
+        std::cout << "[" << #level << "] [" << logger << "] " << msg << std::endl; }

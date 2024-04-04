@@ -19,7 +19,9 @@ struct ApplicationDelegate
 class Application
 {
 public:
+    Application();
     Application(std::shared_ptr<IFIXLogger> logger, std::shared_ptr<IFIXStore> store);
+
     virtual ~Application();
 
     void setDelegate(std::shared_ptr<ApplicationDelegate> delegate)
@@ -27,10 +29,7 @@ public:
         m_delegate = delegate;
     }
 
-    void createSession(const std::string& sessionName, const SessionSettings& settings)
-    {
-
-    }
+    void createSession(const std::string& sessionName, const SessionSettings& settings);
 
     std::shared_ptr<Session> getSession(const std::string& sessionName)
     {
@@ -58,4 +57,6 @@ private:
     std::unordered_map<std::string, std::shared_ptr<Session>> m_sessionMap;
 
     std::weak_ptr<ApplicationDelegate> m_delegate;
+
+    CREATE_LOGGER("Application");
 };

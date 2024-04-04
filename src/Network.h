@@ -81,6 +81,8 @@ private:
 
     std::mutex m_mutex;
     std::shared_ptr<ConnectionHandle> m_connection;
+
+    CREATE_LOGGER("Network");
 };
 
 struct Acceptor
@@ -99,6 +101,11 @@ public:
         m_bufferMap.erase(fd);
     }
 
+    void clear()
+    {
+        m_bufferMap.clear();
+    }
+
 private:
     std::unordered_map<int, std::string> m_bufferMap;
     char m_buffer[READ_BUF_SIZE];
@@ -109,7 +116,12 @@ private:
 class ReaderThread
 {
 public:
-    ReaderThread(Network& network) : m_running(true), m_network(network) {}
+    ReaderThread(Network& network) 
+        : m_running(true)
+        , m_network(network) 
+    {
+        m_thread = std::thread([&]{ process(); });
+    }
     
     void process();
     void process(int fd);
@@ -118,7 +130,9 @@ public:
     void disconnect(int fd);
 
     bool addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd);
+    void accept(int fd, const std::shared_ptr<Acceptor>& acceptor);
 
+    bool hasAcceptor(const SessionID_T sessionID, int fd);
     void addAcceptor(const std::shared_ptr<NetworkHandler>& handler, const SessionID_T sessionID, int fd);
     void removeAcceptor(const SessionID_T sessionID, int fd);
 
@@ -130,11 +144,9 @@ public:
     }
 
 private:
-    bool accept(int serverFD, std::string& address);
-
     std::atomic<bool> m_running;
-    std::mutex m_mutex;
-    std::condition_variable m_cv;
+    std::recursive_mutex m_mutex;
+    std::condition_variable_any m_cv;
     std::thread m_thread;
 
     tbb::concurrent_queue<int> m_readyFDs;
@@ -170,7 +182,12 @@ struct WriteBuffer
 class WriterThread
 {
 public:
-    WriterThread(Network& network) : m_running(true), m_network(network) {}
+    WriterThread(Network& network) 
+        : m_running(true)
+        , m_network(network) 
+    {
+        m_thread = std::thread([&]{ process(); });
+    }
 
     void process();
 
@@ -206,13 +223,14 @@ public:
 
     bool connect(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler);
 
+    bool hasAcceptor(const SessionSettings& settings);
     bool addAcceptor(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler);
     bool removeAcceptor(const SessionSettings& settings);
 
 private:
     void run();
 
-    bool addClient(int fd);
+    bool accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor);
 
     // acceptor port -> fd
     std::mutex m_mutex;
@@ -227,6 +245,7 @@ private:
     std::vector<std::unique_ptr<WriterThread>> m_writerThreads;
 
     std::atomic<bool> m_running;
+    std::thread m_thread;
 
     CREATE_LOGGER("Network");
 

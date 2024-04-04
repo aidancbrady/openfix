@@ -6,7 +6,7 @@
 
 struct Utils
 {
-    inline static std::string UTC_TIMESTAMP_FMT = "%Y%m%d-%H:%M:%S.";
+    inline static std::string UTC_TIMESTAMP_FMT = "%Y%m%d-%H:%M:%S";
 
     inline static long getEpochMillis()
     {
@@ -31,6 +31,29 @@ struct Utils
 
     inline static std::string getUTCTimestamp()
     {
-        return "";
+        auto now = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+        std::tm utc_time = {};
+        gmtime_r(&time, &utc_time);
+
+        std::ostringstream ostr;
+        ostr << std::put_time(&utc_time, UTC_TIMESTAMP_FMT.c_str());
+
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+        ostr << '.' << std::setfill('0') << std::setw(3) << ms.count();
+
+        return ostr.str();
+    }
+
+    inline static std::pair<std::string, size_t> getTagValue(const std::string& msg, const std::string& tag, int idx = 0)
+    {
+        auto begin_it = msg.find('\01' + tag + '=', idx);
+        if (begin_it == std::string::npos)
+            return {"", begin_it};
+        begin_it += 2 + tag.size();
+        auto end_it = msg.find('\01', begin_it);
+        if (end_it == std::string::npos)
+            return {"", end_it};
+        return {msg.substr(begin_it, (end_it - begin_it)), end_it};
     }
 };

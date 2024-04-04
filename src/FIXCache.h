@@ -62,7 +62,7 @@ private:
     
     std::map<int, Message> m_messages;
 
-    std::mutex m_mutex;
+    std::recursive_mutex m_mutex;
 
     std::map<int, Message> m_inboundQueue;
 

@@ -1,6 +1,6 @@
 #include "FileUtils.h"
 
-FileWriter::FileWriter() : m_enabled(true) {}
+FileWriter::FileWriter() : m_enabled(false) {}
 
 FileWriter::~FileWriter()
 {
@@ -10,19 +10,23 @@ FileWriter::~FileWriter()
 void FileWriter::start()
 {
     m_thread = std::thread([&]() {
+        m_enabled.store(true, std::memory_order_release);
         process();
     });
 }
 
 void FileWriter::stop()
 {
-    m_enabled.store(false, std::memory_order_release);
-    m_cv.notify_one();
-    m_thread.join();
+    if (m_enabled.load(std::memory_order_acquire))
+    {
+        m_enabled.store(false, std::memory_order_release);
+        m_cv.notify_one();
+        m_thread.join();
 
-    // close open files
-    for (auto& [_, instance] : m_instances)
-        instance->m_stream.close();
+        // close open files
+        for (auto& [_, instance] : m_instances)
+            instance->m_stream.close();
+    }
 }
 
 std::unique_ptr<WriterInstance>& FileWriter::createInstance(const std::string& fileName)
