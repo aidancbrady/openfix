@@ -5,14 +5,17 @@
 
 struct FieldNotFound : public std::exception
 {
-    FieldNotFound(int tag) : m_tag(tag) {}
+    FieldNotFound(int tag) 
+    {
+        m_message = "Field not found: " + std::to_string(tag);
+    }
 
     const char* what() const throw()
     {
-        return ("Field not found: " + std::to_string(m_tag)).c_str();
+        return m_message.c_str();
     }
 
-    int m_tag;
+    std::string m_message;
 };
 
 #define CREATE_STRING_EXCEPTION(name)                                           \

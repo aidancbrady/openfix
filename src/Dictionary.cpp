@@ -8,8 +8,6 @@
 #include <functional>
 #include <strings.h>
 
-GroupSpec GroupSpec::UNKNOWN;
-
 enum class MessageState
 {
     HEADER,
@@ -27,11 +25,13 @@ enum class ParserState
 
 struct ParserGroupInfo
 {
-    ParserGroupInfo(std::reference_wrapper<const GroupSpec> spec, std::reference_wrapper<FieldMap> group) : m_spec(spec), m_group(group), 
+    ParserGroupInfo(std::shared_ptr<GroupSpec> spec, std::reference_wrapper<FieldMap> group) : m_spec(std::move(spec)), m_group(group), 
         m_groupTag(0), m_groupCount(0), m_groupMaxCount(0)
-    {}
+    {
 
-    std::reference_wrapper<const GroupSpec> m_spec;
+    }
+
+    std::shared_ptr<GroupSpec> m_spec;
     std::reference_wrapper<FieldMap> m_group;
 
     int m_groupTag;
@@ -68,7 +68,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     groupStack.emplace_back(m_headerSpec, ret.getHeader());
 
     auto curGroup = [&]() -> FieldMap& { return groupStack[groupStack.size()-1].m_group.get(); };
-    auto curSpec = [&]() -> const GroupSpec& { return groupStack[groupStack.size()-1].m_spec.get(); };
+    auto curSpec = [&]() -> const GroupSpec& { return *groupStack[groupStack.size()-1].m_spec; };
 
     int checksum = 0;
     int tag = 0;
@@ -76,23 +76,26 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     int dataLength = -1;
     int tagCount = 0;
 
-    auto validateGroup = [&](FieldMap& group, const GroupSpec& spec) {
+    auto validateGroup = [&](FieldMap& group, const std::shared_ptr<GroupSpec>& spec) {
+        group.setSpec(spec);
+        if (spec->m_ordered)
+            group.sortFields();
         if (!validateRequired)
             return;
-        for (const auto& field : spec.m_fields)
+        for (const auto& field : spec->m_fields)
         {
             if (field.second && !group.has(field.first))
                 TRY_LOG_THROW("Message is missing required field: " << field.first);
         }
     };
 
-    auto overwriteStack = [&](size_t curIdx) {
-        while (groupStack.size()-1 > curIdx)
+    auto overwriteStack = [&](int curIdx) {
+        while (static_cast<int>(groupStack.size()) > curIdx+1)
         {
             auto& group = groupStack[groupStack.size()-1];
             if (group.m_groupTag > 0 && group.m_groupCount < group.m_groupMaxCount)
                 TRY_LOG_THROW("Repeating group terminated with count less than NumInGroup (tag=" << group.m_groupTag << ")");
-            validateGroup(group.m_group.get(), group.m_spec.get());
+            validateGroup(group.m_group.get(), group.m_spec);
             groupStack.pop_back();
         }
     };
@@ -150,7 +153,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                         return -1;
                     }
 
-                    validateGroup(group.m_group.get(), group.m_spec.get());
+                    validateGroup(group.m_group.get(), group.m_spec);
 
                     // create a duplicate group with this tag
                     auto& newGroup = groupStack[groupIdx-1].m_group.get().addGroup(group.m_groupTag);
@@ -169,8 +172,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
             auto trySetField = [&](ParserGroupInfo& group, int groupIdx) {
                 // spec contains field
-                auto fieldIt = group.m_spec.get().m_fields.find(tag);
-                if (fieldIt != m_headerSpec.m_fields.end())
+                auto fieldIt = group.m_spec->m_fields.find(tag);
+                if (fieldIt != m_headerSpec->m_fields.end())
                 {
                     if (group.m_group.get().has(tag))
                         return handleRepeatingTag(group, groupIdx);
@@ -180,15 +183,15 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 }
 
                 // spec contains group
-                auto groupIt = group.m_spec.get().m_groups.find(tag);
-                if (groupIt != group.m_spec.get().m_groups.end())
+                auto groupIt = group.m_spec->m_groups.find(tag);
+                if (groupIt != group.m_spec->m_groups.end())
                 {
                     if (group.m_group.get().getGroupCount(tag) > 0)
                         return handleRepeatingTag(group, groupIdx);
                     
                     // create a new group
                     auto& fieldMap = group.m_group.get().addGroup(tag);
-                    ParserGroupInfo newGroup(*groupIt->second, fieldMap);
+                    ParserGroupInfo newGroup(groupIt->second, fieldMap);
                     newGroup.m_groupTag = tag;
                     newGroup.m_groupCount = 1;
 
@@ -243,8 +246,10 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                     TRY_LOG_THROW("Unknown message: " << msgType);
                 }
 
-                groupStack.emplace_back(it == m_bodySpecs.end() ? GroupSpec::UNKNOWN : it->second, ret.getBody());
+                groupStack.emplace_back(it == m_bodySpecs.end() ? nullptr : it->second, ret.getBody());
                 msgState = MessageState::BODY;
+                if (trySetField(groupStack[0], 0) >= 0)
+                    continue;
             }
 
             // if we're in the body, see if we can move to the trailer
@@ -255,7 +260,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
                 if (newIdx >= 0)
                 {
-                    validateGroup(groupStack[0].m_group.get(), groupStack[0].m_spec.get());
+                    validateGroup(groupStack[0].m_group.get(), groupStack[0].m_spec);
                     msgState = MessageState::TRAILER;
                     groupStack[0] = test;
                     overwriteStack(newIdx);
@@ -552,6 +557,7 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
 
     std::function<std::shared_ptr<GroupSpec>(const pugi::xml_node&)> buildGroup = [&](const pugi::xml_node& node) {
         std::shared_ptr<GroupSpec> ret = std::make_shared<GroupSpec>();
+        ret->m_ordered = node.attribute("ordered").as_bool();
 
         for (const auto& field : node)
         {
@@ -560,12 +566,17 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
                 std::string componentName = field.attribute("name").as_string();
                 // this must be a completed component; just merge everything in
                 auto& component = componentMap[componentName];
-                for (auto entry : component.m_fields)
+                for (auto entry : component.m_fields) {
                     if (!ret->m_fields.insert(entry).second)
                         throw DictionaryParsingError("Multiple references of field in group: " + std::to_string(entry.first));
-                for (auto& entry : component.m_groups)
+                    ret->m_fieldOrder.push_back(entry.first);
+                }
+                    
+                for (auto& entry : component.m_groups) {
                     if (!ret->m_groups.insert(entry).second)
                         throw DictionaryParsingError("Multiple references of group in group: " + std::to_string(entry.first));
+                    ret->m_fieldOrder.push_back(entry.first);
+                }
             }
             else if (strcasecmp(field.name(), "group") == 0)
             {
@@ -574,6 +585,7 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
                 if (ret->m_groups.find(tag) != ret->m_groups.end())
                     throw DictionaryParsingError("Multiple references of group in group: " + std::to_string(tag));
                 ret->m_groups[tag] = buildGroup(field);
+                ret->m_fieldOrder.push_back(tag);
             }
             else if (strcasecmp(field.name(), "field") == 0)
             {
@@ -583,6 +595,7 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
                 if (ret->m_fields.find(tag) != ret->m_fields.end())
                     throw DictionaryParsingError("Multiple references of field in group: " + std::to_string(tag));
                 ret->m_fields.insert({fieldMap[fieldName], required});
+                ret->m_fieldOrder.push_back(tag);
             }
         }
 
@@ -598,9 +611,9 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     }
 
     // build header
-    dict->m_headerSpec = *buildGroup(header);
+    dict->m_headerSpec = buildGroup(header);
     // build trailer
-    dict->m_trailerSpec = *buildGroup(trailer);
+    dict->m_trailerSpec = buildGroup(trailer);
     // build messages
     for (const auto& node : root.child("messages").children())
     {
@@ -609,7 +622,7 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
             throw DictionaryParsingError("msgtype definition missing from message");
         if (dict->m_bodySpecs.find(msgtype) != dict->m_bodySpecs.end())
             throw DictionaryParsingError("Redefinition of message type: " + msgtype);
-        dict->m_bodySpecs[msgtype] = *buildGroup(node);
+        dict->m_bodySpecs[msgtype] = buildGroup(node);
     }
 
     m_dictionaries[path] = dict;

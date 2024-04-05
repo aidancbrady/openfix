@@ -10,21 +10,6 @@
 #include <unordered_set>
 #include <unordered_map>
 
-struct GroupSpec
-{
-    using FieldSet = std::unordered_map<int, bool>;
-    
-    bool empty() const
-    {
-        return m_fields.empty() && m_groups.empty();
-    }
-
-    FieldSet m_fields;
-    std::unordered_map<int, std::shared_ptr<GroupSpec>> m_groups;
-
-    static GroupSpec UNKNOWN;
-};
-
 class Dictionary
 {
 public:
@@ -39,10 +24,10 @@ public:
     }
 
 private:
-    GroupSpec m_headerSpec;
-    GroupSpec m_trailerSpec;
+    std::shared_ptr<GroupSpec> m_headerSpec;
+    std::shared_ptr<GroupSpec> m_trailerSpec;
 
-    std::unordered_map<std::string, GroupSpec> m_bodySpecs;
+    std::unordered_map<std::string, std::shared_ptr<GroupSpec>> m_bodySpecs;
     std::unordered_map<int, FieldType> m_fields;
 
     friend class DictionaryRegistry;

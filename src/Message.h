@@ -3,10 +3,13 @@
 #include "Exception.h"
 #include "Config.h"
 
+#include <openfix/LinkedHashMap.h>
+
 #include <vector>
 #include <sstream>
 #include <unordered_map>
 #include <map>
+#include <memory>
 
 inline constexpr char INTERNAL_SOH_CHAR = '\01';
 inline constexpr char EXTERNAL_SOH_CHAR = '|';
@@ -56,6 +59,21 @@ struct FieldTypes
     #undef F
 };
 
+struct GroupSpec
+{
+    using FieldSet = std::unordered_map<int, bool>;
+    
+    bool empty() const
+    {
+        return m_fields.empty() && m_groups.empty();
+    }
+
+    FieldSet m_fields;
+    std::unordered_map<int, std::shared_ptr<GroupSpec>> m_groups;
+    bool m_ordered = false;
+    std::vector<int> m_fieldOrder;
+};
+
 class FieldMap
 {
 public:
@@ -90,7 +108,7 @@ public:
         m_fields[tag] = value;
     }
 
-    const std::map<int, std::string>& getFields() const
+    const auto& getFields() const
     {
         return m_fields;
     }
@@ -153,6 +171,18 @@ public:
         return m_fields.find(tag) != m_fields.end();
     }
 
+    void setSpec(std::shared_ptr<GroupSpec> spec)
+    {
+        m_groupSpec = std::move(spec);
+    }
+
+    const std::shared_ptr<GroupSpec>& getSpec() const
+    {
+        return m_groupSpec;
+    }
+
+    void sortFields();
+
     std::string toString()
     {
         std::ostringstream ostr;
@@ -161,8 +191,11 @@ public:
     }
 
 private:
-    std::map<int, std::string> m_fields;
+    LinkedHashMap<int, std::string> m_fields;
     std::unordered_map<int, std::vector<FieldMap>> m_groups;
+
+    // if this is a group present in our dictionary, we can reference additional metadata here
+    std::shared_ptr<GroupSpec> m_groupSpec;
 
     friend std::ostream& operator<<(std::ostream&, const FieldMap&);
 };

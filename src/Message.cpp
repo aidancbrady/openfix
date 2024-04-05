@@ -3,6 +3,7 @@
 #include "Fields.h"
 
 #include <unordered_set>
+#include <functional>
 
 const std::unordered_set<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
 
@@ -64,4 +65,31 @@ std::ostream& operator<<(std::ostream& ostr, const Message& msg)
     ostr << body;
     ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << checksumStr << INTERNAL_SOH_CHAR;
     return ostr;
+}
+
+void FieldMap::sortFields()
+{
+    LinkedHashMap<int, std::string> newFields;
+
+    if (m_groupSpec) {
+        for (auto tag : m_groupSpec->m_fieldOrder) {
+            auto it = m_fields.find(tag);
+            if (it != m_fields.end()) {
+                newFields.insert(*it);
+                m_fields.erase(it);
+            }
+        }
+    }
+
+    std::vector<std::pair<int, std::string>> entries;
+    for (const auto& entry : m_fields)
+        entries.emplace_back(entry);
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b){
+        return a.first < b.first;
+    });
+    for (const auto& entry : entries) {
+        newFields.insert(entry);
+    }
+
+    m_fields = std::move(newFields);
 }
