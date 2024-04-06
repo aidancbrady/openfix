@@ -2,6 +2,8 @@
 
 #include "Message.h"
 #include "Fields.h"
+#include "Exception.h"
+
 #include <openfix/Utils.h>
 
 #include <cerrno>
@@ -114,7 +116,7 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
 {
     if (!m_running.load(std::memory_order_acquire))
         return false;
-        
+
     std::string hostname = settings.getString(SessionSettings::CONNECT_HOST);
     int port = settings.getLong(SessionSettings::CONNECT_PORT);
 
@@ -450,7 +452,12 @@ void ReaderThread::process()
             continue;
 
         LOG_TRACE("processing fd=" << fd);
-        process(fd);
+        try {
+            process(fd);
+        } catch (const SocketClosedError& e) {
+            LOG_ERROR("Socket is closed, disconnecting fd=" << fd);
+            disconnect(fd);
+        }
     }
 }
 
@@ -469,6 +476,7 @@ void ReaderThread::process(int fd)
             auto msgs = m_buffer.read(fd);
             for (const auto& msg : msgs)
                 it->second->processMessage(msg);
+
             return;
         }
     }
@@ -631,8 +639,12 @@ std::vector<std::string> ReadBuffer::read(int fd)
     int bytes = ::recv(fd, read_buffer, sizeof(read_buffer), 0);
     
     if (bytes <= 0) {
-        if (bytes == -1)
+        if (bytes == -1) {
             LOG_ERROR("Error reading from socket: " << std::string(strerror(errno)));
+        } else {
+            throw SocketClosedError("Socket is closed");
+        }
+
         buffer.clear();
         return ret;
     }
@@ -721,11 +733,17 @@ void WriterThread::process()
             int sent = 0;
             while (static_cast<size_t>(sent) < buffer.m_buffer.length())
             {
-                int ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length(), 0);
-                if (ret < 0)
-                    ; // error
+                int ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length(), MSG_NOSIGNAL);
+                if (ret < 0) {
+                    LOG_ERROR("Failed to send on fd=" << fd << ": " << std::string(strerror(errno)));
+                    sent = -1;
+                    break;
+                }
                 sent += ret;
             }
+
+            if (sent == -1)
+                continue;
 
             // process callbacks
             SendCallback_T callback;

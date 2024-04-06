@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ctime>
 #include <chrono>
 #include <sstream>
 #include <iomanip>
@@ -10,8 +11,7 @@ struct Utils
 
     inline static long getEpochMillis()
     {
-        using namespace std::chrono;
-        return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     }
 
     inline static long parseUTCTimestamp(const std::string& timestamp)
@@ -19,11 +19,26 @@ struct Utils
         std::tm tm = {};
         std::stringstream ss(timestamp);
         ss >> std::get_time(&tm, UTC_TIMESTAMP_FMT.c_str());
-        auto ms = std::chrono::system_clock::from_time_t(std::mktime(&tm)).time_since_epoch().count();
+
+        std::time_t t = std::mktime(&tm);
+        long timezoneOffset = 0;
+    #ifdef _MSC_VER
+        _get_timezone(&timezoneOffset);
+    #else
+        timezoneOffset = timezone;
+    #endif
+        t -= timezoneOffset;
+
+        auto time_since_epoch = std::chrono::system_clock::from_time_t(t).time_since_epoch();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(time_since_epoch).count();
 
         auto ms_it = timestamp.find('.');
         if (ms_it != std::string::npos) {
-            ms += std::stoi(timestamp.substr(ms_it + 1));
+            auto ms_str = timestamp.substr(ms_it + 1);
+            if (ms_str.length() > 3) {
+                ms_str = ms_str.substr(0, 3);
+            }
+            ms += std::stoi(ms_str);
         }
 
         return ms;

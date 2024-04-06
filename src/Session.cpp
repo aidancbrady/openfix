@@ -49,20 +49,28 @@ void Session::onMessage(const std::string& text)
             return;
         }
 
-        // parse message
-        auto msg = m_dictionary->parse(m_settings, text);
+        try {
+            // parse message
+            auto msg = m_dictionary->parse(m_settings, text);
 
-        auto time = Utils::getEpochMillis();
-        m_lastRecvHeartbeat = time;
+            LOG_DEBUG("Parsed: " << text);
 
-        processMessage(msg, time);
+            auto time = Utils::getEpochMillis();
+            m_lastRecvHeartbeat = time;
 
-        // handle inbound queue
-        auto& queue = m_cache->getInboundQueue();
-        while (!queue.empty() && getTargetSeqNum() == queue.begin()->first)
-        {
-            processMessage(queue.begin()->second, time);
-            queue.erase(queue.begin());
+            processMessage(msg, time);
+
+            // handle inbound queue
+            auto& queue = m_cache->getInboundQueue();
+            while (!queue.empty() && getTargetSeqNum() == queue.begin()->first)
+            {
+                processMessage(queue.begin()->second, time);
+                queue.erase(queue.begin());
+            }
+        } catch (const MessageParsingError& e) {
+            LOG_ERROR("Error while parsing message: " << e.what());
+        } catch (...) {
+            LOG_ERROR("Unknown error while handling message!");
         }
     });
 }
@@ -157,7 +165,7 @@ void Session::runUpdate()
             return;
         }
 
-        if (m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
+        if (m_settings.getSessionType() == SessionType::INITIATOR && m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
         {
             sendLogon();
             return;
@@ -204,9 +212,6 @@ void Session::handleLogon(const Message& msg)
         return;
     }
 
-    if (m_settings.getSessionType() == SessionType::ACCEPTOR)
-        m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt));
-
     bool isPosDup = msg.getBody().tryGetBool(FIELD::PosDupFlag);
     if (isPosDup && !msg.getBody().has(FIELD::OrigSendingTime))
     {
@@ -221,13 +226,20 @@ void Session::handleLogon(const Message& msg)
         return;
     }
 
+    if (m_settings.getSessionType() == SessionType::ACCEPTOR)
+    {
+        // set hbint, send a logon
+        m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt));
+        sendLogon();
+    }
+
+    m_state = SessionState::READY;
+
     if (seqNum > m_cache->getTargetSeqNum())
     {
         sendResendRequest(m_cache->getTargetSeqNum(), 0);
         return;
     }
-
-    m_state = SessionState::READY;
 }
 
 void Session::handleResendRequest(const Message& msg)
@@ -439,8 +451,10 @@ bool Session::validateMessage(const Message& msg, long time)
 
     // validate SendingTime
     auto sendingTime = Utils::parseUTCTimestamp(msg.getHeader().getField(FIELD::SendingTime));
-    if (std::abs(time - sendingTime) > m_settings.getLong(SessionSettings::SENDING_TIME_THRESHOLD))
+    auto diff = time - sendingTime;
+    if (std::abs(diff) > (m_settings.getLong(SessionSettings::SENDING_TIME_THRESHOLD) * 1000))
     {
+        LOG_ERROR("Sending time error on incoming message, current time=" << time << ", diff=" << diff);
         sendReject(msg, SessionRejectReason::SendingTimeProblem);
         logout("SendingTime(52) outside of threshold", false);
         return false;
@@ -449,13 +463,13 @@ bool Session::validateMessage(const Message& msg, long time)
     std::string msgType = msg.getHeader().getField(FIELD::MsgType);
     if (m_state == SessionState::LOGON && msgType != MESSAGE::LOGON)
     {
-        logout("Received unexpected MsgType(35) during logon state", true);
+        logout("Received unexpected MsgType(35) during logon state: " + msgType, true);
         return false;
     }
 
     if (m_state == SessionState::LOGOUT && msgType != MESSAGE::LOGOUT && msgType != MESSAGE::RESEND_REQUEST)
     {
-        logout("Received unexpected MsgType(35) during logoff state", true);
+        logout("Received unexpected MsgType(35) during logoff state: " + msgType, true);
         return false;
     }
 
