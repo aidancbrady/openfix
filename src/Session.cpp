@@ -16,9 +16,9 @@ Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFI
     m_dictionary = DictionaryRegistry::instance().load(settings.getString(SessionSettings::FIX_DICTIONARY));
     m_cache = std::make_unique<MemoryCache>(settings, m_dictionary, store);
 
-    m_heartbeatInterval = settings.getLong(SessionSettings::HEARTBEAT_INTERVAL);
-    m_logonInterval = settings.getLong(SessionSettings::LOGON_INTERVAL);
-    m_reconnectInterval = settings.getLong(SessionSettings::RECONNECT_INTERVAL);
+    m_heartbeatInterval = settings.getLong(SessionSettings::HEARTBEAT_INTERVAL) * 1000;
+    m_logonInterval = settings.getLong(SessionSettings::LOGON_INTERVAL) * 1000;
+    m_reconnectInterval = settings.getLong(SessionSettings::RECONNECT_INTERVAL) * 1000;
     
     m_network = std::make_shared<NetworkHandler>(m_settings, network, std::bind(&Session::onMessage, this, std::placeholders::_1));
 }
@@ -128,7 +128,9 @@ void Session::processMessage(const Message& msg, long time)
     }
     else if (msgType == MESSAGE::TEST_REQUEST)
     {
-        sendHeartbeat(time, msg.getBody().getField(FIELD::TestReqID));
+        auto test_id = msg.getBody().getField(FIELD::TestReqID);
+        LOG_DEBUG("Responding to test request ID=" << test_id << " with heartbeat");
+        sendHeartbeat(time, test_id);
     }
     else if (msgType == MESSAGE::RESEND_REQUEST)
     {
@@ -146,6 +148,9 @@ void Session::send(Message& msg, SendCallback_T callback)
     m_cache->cache(seqnum, msg);
     m_cache->nextSenderSeqNum();
     m_network->send({msg.toString(), callback});
+
+    // update our heartbeat monitor as we just sent data
+    m_lastSentHeartbeat = Utils::getEpochMillis();
 }
 
 void Session::runUpdate()
@@ -159,6 +164,7 @@ void Session::runUpdate()
         {
             if ((time - m_lastReconnect) >= m_reconnectInterval)
             {
+                LOG_DEBUG("Reconnect interval exceeded (" << (time - m_lastReconnect) << " >= " << m_reconnectInterval << "), attempting reconnect");
                 m_network->start();
                 m_lastReconnect = time;
             }
@@ -168,6 +174,7 @@ void Session::runUpdate()
 
         if (m_settings.getSessionType() == SessionType::INITIATOR && m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
         {
+            LOG_DEBUG("Logon interval exceeded (" << (time - m_lastLogon) << " >= " << m_logonInterval << "), attempting logon");
             sendLogon();
             return;
         }
@@ -192,12 +199,14 @@ void Session::runUpdate()
         {
             if ((time - m_lastSentHeartbeat) >= m_heartbeatInterval)
             {
+                LOG_DEBUG("Heartbeat threshold exceeded (" << (time - m_lastSentHeartbeat) << " >= " << m_heartbeatInterval << "), sending heartbeat");
                 sendHeartbeat(time);
             }
 
             long heartbeatTimeout = static_cast<long>(m_settings.getDouble(SessionSettings::TEST_REQUEST_THRESHOLD) * m_heartbeatInterval);
             if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout)
             {
+                LOG_WARN("Heartbeat timeout exceeded (" << (time - m_lastRecvHeartbeat) << " >= " << heartbeatTimeout << "), sending test request");
                 sendTestRequest();
             }
         }
@@ -230,7 +239,7 @@ void Session::handleLogon(const Message& msg)
     if (m_settings.getSessionType() == SessionType::ACCEPTOR)
     {
         // set hbint, send a logon
-        m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt));
+        m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt)) * 1000;
         sendLogon();
     }
 
@@ -308,10 +317,11 @@ void Session::sendLogon()
 {
     Message msg;
     msg.getHeader().setField(FIELD::MsgType, MESSAGE::LOGON);
-    msg.getBody().setField(FIELD::HeartBtInt, std::to_string(m_heartbeatInterval));
+    msg.getBody().setField(FIELD::HeartBtInt, std::to_string(m_heartbeatInterval / 1000));
     msg.getBody().setField(FIELD::EncryptMethod, "0");
     send(msg);
 
+    // update last time
     m_lastLogon = Utils::getEpochMillis();
 }
 
@@ -364,8 +374,6 @@ void Session::sendHeartbeat(long time, std::string testReqID)
     if (!testReqID.empty())
         msg.getBody().setField(FIELD::TestReqID, testReqID);
     send(msg);
-
-    m_lastSentHeartbeat = Utils::getEpochMillis();
 }
 
 void Session::sendTestRequest()
