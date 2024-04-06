@@ -2,7 +2,7 @@
 
 #include "Fields.h"
 
-#include <pugixml/pugixml.hpp>
+#include "pugixml.hpp"
 
 #include <list>
 #include <functional>

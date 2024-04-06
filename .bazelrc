@@ -1,2 +1,3 @@
 build --action_env=BAZEL_CXXOPTS="-std=c++2a"
 build:myconfig --enable_runfiles
+common --enable_bzlmod

@@ -9,7 +9,6 @@ cc_library(
     srcs = glob(["*.cpp", "lib/*.cpp"]),
     deps = [
         "//lib:openfix-lib",
-        "@pugixml//:pugixml",
-        "@oneTBB//:tbb"
+        "@pugixml//:pugixml"
     ]
 )
