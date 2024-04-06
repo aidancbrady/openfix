@@ -2,6 +2,7 @@
 
 #include <openfix/FileUtils.h>
 #include <openfix/Log.h>
+#include <openfix/Utils.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -14,7 +15,10 @@
 #include "Config.h"
 #include "Message.h"
 
-enum class Direction { INBOUND, OUTBOUND };
+enum class Direction {
+    INBOUND,
+    OUTBOUND
+};
 
 using LoggerFunction = std::function<void(const std::string& msg)>;
 
@@ -44,7 +48,8 @@ public:
 
     void logMessage(const std::string& msg, Direction dir)
     {
-        m_msgLogger(msg + "\n");
+        auto time = Utils::getUTCTimestamp();
+        m_msgLogger(time + " " + (dir == Direction::INBOUND ? "RECV: " : "SENT: ") + msg + "\n");
     }
 
 private:

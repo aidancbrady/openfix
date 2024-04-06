@@ -4,4 +4,9 @@ bazel-openfix
 bazel-out
 bazel-testlogs
 
+# bzlmod
 MODULE.bazel.lock
+
+# testing
+data
+log

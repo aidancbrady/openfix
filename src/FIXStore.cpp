@@ -1,6 +1,7 @@
 #include "FIXStore.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -8,7 +9,11 @@
 
 #define READ_BUF 1024
 
-enum class WriteType : uint8_t { MSG, SENDER_SEQ_NUM, TARGET_SEQ_NUM };
+enum class WriteType : uint8_t {
+    MSG,
+    SENDER_SEQ_NUM,
+    TARGET_SEQ_NUM
+};
 
 FileStore::~FileStore()
 {
@@ -68,10 +73,17 @@ SessionData StoreHandle::load()
 {
     SessionData ret;
 
+    if (!std::filesystem::exists(m_path)) {
+        LOG_INFO("Store file doesn't exist, not loading session state.");
+        return ret;
+    }
+
+    LOG_INFO("Loading session state from store file: " << m_path);
     std::ifstream storeFile(m_path, std::ios::binary);
 
     char buf[READ_BUF];
 
+    size_t cnt = 0;
     while (true) {
         WriteType type;
         storeFile.read(reinterpret_cast<char*>(&type), sizeof(WriteType));
@@ -96,12 +108,12 @@ SessionData StoreHandle::load()
                 throw FileStoreLoadError("Data file corrupted; unable to parse message seqnum");
 
             // now read msg length
-            int length;
+            size_t length;
             if (!storeFile.read(reinterpret_cast<char*>(&length), sizeof(length)))
                 throw FileStoreLoadError("Data file corrupted; unable to parse message length");
 
             // now read msg
-            int read = 0;
+            size_t read = 0;
             while (read < length) {
                 int toRead = length - read;
                 if (!storeFile.read(buf, std::min(READ_BUF, toRead)))
@@ -111,8 +123,11 @@ SessionData StoreHandle::load()
             }
 
             ret.m_messages[seqNum] = msg.str();
+            ++cnt;
         }
     }
+
+    LOG_INFO("Loaded " << cnt << " messages from file store.");
 
     return ret;
 }

@@ -20,6 +20,9 @@ Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFI
     m_reconnectInterval = settings.getLong(SessionSettings::RECONNECT_INTERVAL) * 1000;
 
     m_network = std::make_shared<NetworkHandler>(m_settings, network, std::bind(&Session::onMessage, this, std::placeholders::_1));
+
+    // load from store
+    load();
 }
 
 Session::~Session()
@@ -191,10 +194,13 @@ void Session::internal_update()
             sendHeartbeat(time);
         }
 
-        long heartbeatTimeout = static_cast<long>(m_settings.getDouble(SessionSettings::TEST_REQUEST_THRESHOLD) * m_heartbeatInterval);
-        if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout) {
-            LOG_WARN("Heartbeat timeout exceeded (" << (time - m_lastRecvHeartbeat) << " >= " << heartbeatTimeout << "), sending test request");
-            sendTestRequest();
+        // send a test request if it's been too long since receiving
+        if (m_state != SessionState::TEST_REQUEST) {
+            long heartbeatTimeout = static_cast<long>(m_settings.getDouble(SessionSettings::TEST_REQUEST_THRESHOLD) * m_heartbeatInterval);
+            if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout) {
+                LOG_WARN("Heartbeat timeout exceeded (" << (time - m_lastRecvHeartbeat) << " >= " << heartbeatTimeout << "), sending test request");
+                sendTestRequest();
+            }
         }
     }
 }

@@ -68,7 +68,7 @@ void MemoryCache::cache(int seqnum, const Message& msg)
 {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_messages[seqnum] = msg;
-    m_store.store(seqnum, msg.toString());
+    m_store.store(seqnum, msg.toString(true));
 }
 
 void MemoryCache::getMessages(int begin, int end, MessageConsumer consumer)

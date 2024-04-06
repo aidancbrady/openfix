@@ -1,6 +1,10 @@
 #include "FileUtils.h"
 
-FileWriter::FileWriter() : m_enabled(false) {}
+#include <filesystem>
+
+FileWriter::FileWriter()
+    : m_enabled(false)
+{}
 
 FileWriter::~FileWriter()
 {
@@ -17,8 +21,7 @@ void FileWriter::start()
 
 void FileWriter::stop()
 {
-    if (m_enabled.load(std::memory_order_acquire))
-    {
+    if (m_enabled.load(std::memory_order_acquire)) {
         m_enabled.store(false, std::memory_order_release);
         m_cv.notify_one();
         m_thread.join();
@@ -41,8 +44,7 @@ std::unique_ptr<WriterInstance>& FileWriter::createInstance(const std::string& f
 
 void FileWriter::process()
 {
-    while (m_enabled.load(std::memory_order_acquire))
-    {
+    while (m_enabled.load(std::memory_order_acquire)) {
         std::unique_lock lock(m_mutex);
         m_cv.wait(lock);
 
@@ -51,8 +53,7 @@ void FileWriter::process()
             return;
 
         // find instances ready for writing
-        for (auto& [_, instancePtr] : m_instances)
-        {
+        for (auto& [_, instancePtr] : m_instances) {
             auto& instance = *instancePtr;
             // swap buffer
             {
@@ -60,14 +61,29 @@ void FileWriter::process()
                 if (!instance.m_queue.empty())
                     instance.m_queue.swap(instance.m_buffer);
             }
+
             if (instance.m_buffer.empty())
                 continue;
-   
+
             // write
-            if (!instance.m_stream.is_open())
+            if (!instance.m_stream.is_open() || !instance.m_stream.good()) {
+                if (instance.m_stream.is_open())
+                    instance.m_stream.close();  // close the stream if it's in an error state
+
+                auto dir_it = instance.m_path.rfind(std::filesystem::path::preferred_separator);
+                std::filesystem::create_directories(instance.m_path.substr(0, dir_it));
+
+                LOG_DEBUG("Opening for writing: " << instance.m_path);
                 instance.m_stream.open(instance.m_path, std::ofstream::out | std::ofstream::app);
+                if (!instance.m_stream.good()) {
+                    LOG_ERROR("Failed to open file for writing: " << instance.m_path);
+                    continue;
+                }
+            }
+
             instance.m_stream << instance.m_buffer;
-    
+            instance.m_stream.flush();
+
             // clear the buffer
             instance.m_buffer.clear();
         }

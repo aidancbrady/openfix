@@ -12,8 +12,8 @@ struct SessionData
 {
     std::map<int, std::string> m_messages;
 
-    int m_senderSeqNum;
-    int m_targetSeqNum;
+    int m_senderSeqNum = 1;
+    int m_targetSeqNum = 1;
 };
 
 using WriteFunction = std::function<void(const std::string&)>;
@@ -30,9 +30,11 @@ public:
     SessionData load();
 
 private:
-    StoreHandle(const SessionSettings& settings, WriteFunction writeFunc, std::string path) : m_settings(settings), m_writeFunc(std::move(writeFunc)), m_path(std::move(path))
-    {
-    }
+    StoreHandle(const SessionSettings& settings, WriteFunction writeFunc, std::string path)
+        : m_settings(settings)
+        , m_writeFunc(std::move(writeFunc))
+        , m_path(std::move(path))
+    {}
 
     void write(const std::string& msg)
     {
@@ -42,6 +44,8 @@ private:
     const SessionSettings& m_settings;
     WriteFunction m_writeFunc;
     std::string m_path;
+
+    CREATE_LOGGER("StoreHandle");
 
     friend class IFIXStore;
 };

@@ -28,7 +28,9 @@ const std::string TARGET_COMP_ID_TAG = std::to_string(FIELD::TargetCompID);
 const std::string SENDER_SUB_ID_TAG = std::to_string(FIELD::SenderSubID);
 const std::string CHECKSUM_TAG = std::to_string(FIELD::CheckSum);
 
-Network::Network() : m_epollFD(-1), m_running(false)
+Network::Network()
+    : m_epollFD(-1)
+    , m_running(false)
 {
     m_writerThreadCount = PlatformSettings::getLong(PlatformSettings::WRITER_THREADS);
     m_readerThreadCount = PlatformSettings::getLong(PlatformSettings::READER_THREADS);
@@ -539,7 +541,7 @@ void ReaderThread::process(int fd)
                 }
 
                 // create new connection
-                LOG_INFO("Associating fd=" << fd << " with session: " << cpty);
+                LOG_DEBUG("Associating fd=" << fd << " with session: " << cpty);
                 addConnection(consumerIt->second, fd);
 
                 for (const auto& msg : msgs)
