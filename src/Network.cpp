@@ -143,8 +143,6 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
 
     for (struct addrinfo* addr = ret; addr != nullptr; addr = addr->ai_next)
     {
-        LOG_TRACE("connect iteration");
-
         fd = ::socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
         if (fd == -1)
         {
@@ -205,7 +203,7 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
         }
 
         struct epoll_event event;
-        event.events = EPOLLIN | EPOLLRDHUP; // edge triggered one day
+        event.events = EPOLLIN | EPOLLOUT | EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
         event.data.fd = fd;
 
         if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
@@ -276,7 +274,7 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
         }
 
         struct epoll_event event;
-        event.events = EPOLLIN | EPOLLET; // server socket should only notify once (ET)
+        event.events = EPOLLIN | EPOLLERR | EPOLLET; // server socket should only notify once (ET)
         event.data.fd = fd;
 
         if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) 
@@ -330,20 +328,57 @@ void Network::run()
     {
         while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) > 0)
         {
-            LOG_DEBUG("received " << numEvents << " events");
+            if (numEvents < 0) 
+            {
+                if (errno == EINTR) 
+                {
+                    LOG_WARN("epoll_wait was interrupted by a signal.");
+                    continue; // retry, no biggie
+                }
+
+                LOG_ERROR("epoll_wait error: " << strerror(errno));
+                break;
+            }
+
+            if (numEvents == 0) 
+            {
+                LOG_TRACE("epoll_wait timeout");
+                continue;
+            }
 
             for (int i = 0; i < numEvents; i++) 
             {
                 int fd = events[i].data.fd;
+                uint32_t event_mask = events[i].events;
 
-                if (events[i].events & EPOLLIN)
+                if (event_mask & EPOLLERR) 
+                {
+                    int err = 0;
+                    socklen_t len = sizeof(err);
+                    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0) 
+                    {
+                        LOG_ERROR("EPOLLERR on fd=" << fd << ", error: " << strerror(err));
+                    } 
+                    else 
+                    {
+                        LOG_ERROR("EPOLLERR on fd=" << fd << ", and getsockopt failed to get error.");
+                    }
+                }
+                if (event_mask & EPOLLIN)
                 {
                     LOG_TRACE("data callback for fd=" << fd);
 
                     // data received
                     m_readerThreads[fd % m_readerThreadCount]->queue(fd);
                 }
-                else if (events[i].events & EPOLLRDHUP)
+                if (event_mask & EPOLLOUT)
+                {
+                    LOG_TRACE("write callback for fd=" << fd);
+
+                    // ready to write
+                    m_writerThreads[fd % m_writerThreadCount]->notify();
+                }
+                if (event_mask & (EPOLLRDHUP | EPOLLHUP))
                 {
                     LOG_INFO("disconnect callback for fd=" << fd);
                     // connection hangup
@@ -382,7 +417,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     std::string address = std::string(ip) + ":" + std::to_string(::ntohs(addr.sin_port));
 
     struct epoll_event event;
-    event.events = EPOLLIN | EPOLLRDHUP; // edge triggered one day
+    event.events = EPOLLIN | EPOLLOUT | EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
     event.data.fd = fd;
 
     if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
@@ -451,7 +486,6 @@ void ReaderThread::process()
         if (!m_readyFDs.try_pop(fd))
             continue;
 
-        LOG_TRACE("processing fd=" << fd);
         try {
             process(fd);
         } catch (const SocketClosedError& e) {
@@ -634,12 +668,66 @@ std::vector<std::string> ReadBuffer::read(int fd)
         it = m_bufferMap.insert({fd, ""}).first;
     std::string& buffer = it->second;
 
-    // TODO handle errors here and potentially move to ET mode
     char read_buffer[READ_BUF_SIZE];
-    int bytes = ::recv(fd, read_buffer, sizeof(read_buffer), 0);
-    
+
+    int bytes = 0;
+    while ((bytes = ::recv(fd, read_buffer, sizeof(read_buffer), 0)) > 0)
+    {
+        buffer.append(read_buffer, bytes);
+
+        // parse all the messages we can
+        size_t ptr = 0;
+        while (true)
+        {
+            ptr = 0;
+
+            // find beginning of message
+            ptr = buffer.find(BEGIN_STRING_TAG, ptr);
+            if (ptr == std::string::npos)
+                break;
+
+            if (ptr > 0)
+            {
+                LOG_WARN("Discarding text received in buffer: " << buffer.substr(0, ptr));
+                buffer.erase(0, ptr);
+                ptr = 0;
+            }
+            
+            // find start of bodylength tag
+            auto tag_it = Utils::getTagValue(buffer, BODY_LENGTH_TAG, ptr);
+            if (tag_it.first.empty())
+                break;
+            ptr = tag_it.second;
+
+            try {
+                int bodyLength = std::stoi(tag_it.first);
+                if (bodyLength < 0)
+                    throw std::runtime_error("Negative body length");
+                ptr += bodyLength;
+            } catch (...) {
+                LOG_WARN("Unable to parse message, bad body length: " << buffer);
+                // corrupted message, move up the buffer and hopefully splice it next round
+                buffer.erase(0, ptr + 1);
+                continue;
+            }
+                
+            // find the checksum
+            tag_it = Utils::getTagValue(buffer, CHECKSUM_TAG, ptr);
+            if (tag_it.first.empty())
+                break;
+            ptr = tag_it.second;
+
+            // completed message!
+            ret.push_back(buffer.substr(0, ptr + 1));
+            buffer.erase(0, ptr + 1);
+        }
+    }
+
     if (bytes <= 0) {
         if (bytes == -1) {
+            // nothing more to read for now, this is fine
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return ret;
             LOG_ERROR("Error reading from socket: " << std::string(strerror(errno)));
         } else {
             throw SocketClosedError("Socket is closed");
@@ -649,64 +737,18 @@ std::vector<std::string> ReadBuffer::read(int fd)
         return ret;
     }
 
-    buffer.append(read_buffer, bytes);
-
-    // parse all the messages we can
-    size_t ptr = 0;
-    while (true)
-    {
-        ptr = 0;
-        LOG_INFO(buffer);
-
-        // find beginning of message
-        ptr = buffer.find(BEGIN_STRING_TAG, ptr);
-        if (ptr == std::string::npos)
-            break;
-        LOG_INFO("begin start: " << ptr);
-        if (ptr > 0)
-        {
-            LOG_WARN("Discarding text received in buffer: " << buffer.substr(0, ptr));
-            buffer.erase(0, ptr);
-            ptr = 0;
-        }
-        
-        // find start of bodylength tag
-        auto tag_it = Utils::getTagValue(buffer, BODY_LENGTH_TAG, ptr);
-        if (tag_it.first.empty())
-            break;
-        ptr = tag_it.second;
-
-        LOG_INFO("bodylength: " << tag_it.first);
-
-        try {
-            int bodyLength = std::stoi(tag_it.first);
-            if (bodyLength < 0)
-                throw std::runtime_error("Negative body length");
-            ptr += bodyLength;
-        } catch (...) {
-            LOG_WARN("Unable to parse message, bad body length: " << buffer);
-            // corrupted message, move up the buffer and hopefully splice it next round
-            buffer.erase(0, ptr + 1);
-            continue;
-        }
-            
-        // find the checksum
-        tag_it = Utils::getTagValue(buffer, CHECKSUM_TAG, ptr);
-        if (tag_it.first.empty())
-            break;
-        ptr = tag_it.second;
-        LOG_INFO("checksum: " << tag_it.first);
-        // completed message!
-        ret.push_back(buffer.substr(0, ptr + 1));
-        buffer.erase(0, ptr + 1);
-    }
-
     return ret;
 }
 
 ////////////////////////////////////////////
 //              WriterThread              //
 ////////////////////////////////////////////
+
+void WriterThread::notify()
+{
+    std::lock_guard lock(m_mutex);
+    m_cv.notify_one();
+}
 
 void WriterThread::process()
 {
@@ -730,27 +772,34 @@ void WriterThread::process()
             if (buffer.m_buffer.empty())
                 continue;
 
-            int sent = 0;
-            while (static_cast<size_t>(sent) < buffer.m_buffer.length())
+            size_t sent = 0;
+            while (sent < buffer.m_buffer.length())
             {
-                int ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length(), MSG_NOSIGNAL);
-                if (ret < 0) {
+                ssize_t ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent, MSG_NOSIGNAL);
+                if (ret < 0) 
+                {
                     LOG_ERROR("Failed to send on fd=" << fd << ": " << std::string(strerror(errno)));
-                    sent = -1;
                     break;
                 }
                 sent += ret;
             }
 
-            if (sent == -1)
-                continue;
+            if (sent < buffer.m_buffer.length())
+            {
+                // Not all data was sent; store the unsent part back in m_queue for later.
+                std::lock_guard lock(m_mutex);
+                buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
+                buffer.m_buffer.clear();
+            }
+            else
+            {
+                // process callbacks
+                SendCallback_T callback;
+                while (buffer.m_sendCallbacks.try_pop(callback) && callback)
+                    callback();
 
-            // process callbacks
-            SendCallback_T callback;
-            while (buffer.m_sendCallbacks.try_pop(callback) && callback)
-                callback();
-
-            buffer.m_buffer.clear();
+                buffer.m_buffer.clear();
+            }
         }
     }
 }
@@ -787,7 +836,6 @@ void ConnectionHandle::disconnect()
 
 void ConnectionHandle::send(const MsgPacket& msg)
 {
-    LOG_TRACE("ConnectionHandle", "Attempting to send packet: " << msg.m_msg);
     m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->send(m_fd, msg);
 }
 

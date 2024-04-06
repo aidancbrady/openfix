@@ -41,8 +41,6 @@ void Session::stop()
 void Session::onMessage(const std::string& text)
 {
     dispatcher.dispatch([this, text]{
-        LOG_DEBUG("Received message: " << text);
-
         if (m_state == SessionState::KILLING)
         {
             LOG_WARN("Received message while killing session, ignoring");
@@ -53,7 +51,7 @@ void Session::onMessage(const std::string& text)
             // parse message
             auto msg = m_dictionary->parse(m_settings, text);
 
-            LOG_DEBUG("Parsed: " << text);
+            LOG_DEBUG("Parsed: " << msg);
 
             auto time = Utils::getEpochMillis();
             m_lastRecvHeartbeat = time;
@@ -68,7 +66,7 @@ void Session::onMessage(const std::string& text)
                 queue.erase(queue.begin());
             }
         } catch (const MessageParsingError& e) {
-            LOG_ERROR("Error while parsing message: " << e.what());
+            LOG_ERROR("Error while parsing message: " << e.what() << "\nfull message:\n" << text);
         } catch (...) {
             LOG_ERROR("Unknown error while handling message!");
         }
@@ -147,7 +145,8 @@ void Session::send(Message& msg, SendCallback_T callback)
     int seqnum = populateMessage(msg);
     m_cache->cache(seqnum, msg);
     m_cache->nextSenderSeqNum();
-    m_network->send({msg.toString(), callback});
+    m_network->send({msg.toString(true), callback});
+    LOG_DEBUG("Sending: " << msg);
 
     // update our heartbeat monitor as we just sent data
     m_lastSentHeartbeat = Utils::getEpochMillis();
@@ -156,61 +155,69 @@ void Session::send(Message& msg, SendCallback_T callback)
 void Session::runUpdate()
 {
     dispatcher.dispatch([this]{
-        LOG_TRACE("session update " << m_settings.getSessionID() << " " << m_network->isConnected());
-        
-        long time = Utils::getEpochMillis();
-
-        if (!m_network->isConnected())
-        {
-            if ((time - m_lastReconnect) >= m_reconnectInterval)
-            {
-                LOG_DEBUG("Reconnect interval exceeded (" << (time - m_lastReconnect) << " >= " << m_reconnectInterval << "), attempting reconnect");
-                m_network->start();
-                m_lastReconnect = time;
-            }
-
-            return;
-        }
-
-        if (m_settings.getSessionType() == SessionType::INITIATOR && m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
-        {
-            LOG_DEBUG("Logon interval exceeded (" << (time - m_lastLogon) << " >= " << m_logonInterval << "), attempting logon");
-            sendLogon();
-            return;
-        }
-
-        if (m_state == SessionState::TEST_REQUEST)
-        {
-            if ((time - m_lastRecvHeartbeat) >= m_heartbeatInterval)
-            {
-                terminate("Failed to respond to test request " + std::to_string(m_testReqID) + " within heartbeat interval");
-            }
-        }
-
-        if (m_state == SessionState::LOGOUT)
-        {
-            if ((time - m_logoutTime) >= 2 * m_heartbeatInterval)
-            {
-                terminate("Didn't receive logout ack in time");
-            }
-        }
-
-        if (m_state != SessionState::LOGON && m_state != SessionState::LOGOUT)
-        {
-            if ((time - m_lastSentHeartbeat) >= m_heartbeatInterval)
-            {
-                LOG_DEBUG("Heartbeat threshold exceeded (" << (time - m_lastSentHeartbeat) << " >= " << m_heartbeatInterval << "), sending heartbeat");
-                sendHeartbeat(time);
-            }
-
-            long heartbeatTimeout = static_cast<long>(m_settings.getDouble(SessionSettings::TEST_REQUEST_THRESHOLD) * m_heartbeatInterval);
-            if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout)
-            {
-                LOG_WARN("Heartbeat timeout exceeded (" << (time - m_lastRecvHeartbeat) << " >= " << heartbeatTimeout << "), sending test request");
-                sendTestRequest();
-            }
+        try {
+            internal_update();
+        } catch (...) {
+            LOG_ERROR("Error during update loop!");
         }
     });
+}
+
+void Session::internal_update()
+{
+    long time = Utils::getEpochMillis();
+
+    if (!m_network->isConnected())
+    {
+        m_state = SessionState::LOGON;
+        if ((time - m_lastReconnect) >= m_reconnectInterval)
+        {
+            LOG_DEBUG("Reconnect interval exceeded (" << (time - m_lastReconnect) << " >= " << m_reconnectInterval << "), attempting reconnect");
+            m_network->start();
+            m_lastReconnect = time;
+        }
+
+        return;
+    }
+
+    if (m_settings.getSessionType() == SessionType::INITIATOR && m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
+    {
+        LOG_DEBUG("Logon interval exceeded (" << (time - m_lastLogon) << " >= " << m_logonInterval << "), attempting logon");
+        sendLogon();
+        return;
+    }
+
+    if (m_state == SessionState::TEST_REQUEST)
+    {
+        if ((time - m_lastRecvHeartbeat) >= m_heartbeatInterval)
+        {
+            terminate("Failed to respond to test request " + std::to_string(m_testReqID) + " within heartbeat interval");
+        }
+    }
+
+    if (m_state == SessionState::LOGOUT)
+    {
+        if ((time - m_logoutTime) >= 2 * m_heartbeatInterval)
+        {
+            terminate("Didn't receive logout ack in time");
+        }
+    }
+
+    if (m_state != SessionState::LOGON && m_state != SessionState::LOGOUT)
+    {
+        if ((time - m_lastSentHeartbeat) >= m_heartbeatInterval)
+        {
+            LOG_DEBUG("Heartbeat threshold exceeded (" << (time - m_lastSentHeartbeat) << " >= " << m_heartbeatInterval << "), sending heartbeat");
+            sendHeartbeat(time);
+        }
+
+        long heartbeatTimeout = static_cast<long>(m_settings.getDouble(SessionSettings::TEST_REQUEST_THRESHOLD) * m_heartbeatInterval);
+        if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout)
+        {
+            LOG_WARN("Heartbeat timeout exceeded (" << (time - m_lastRecvHeartbeat) << " >= " << heartbeatTimeout << "), sending test request");
+            sendTestRequest();
+        }
+    }
 }
 
 void Session::handleLogon(const Message& msg)

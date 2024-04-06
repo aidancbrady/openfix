@@ -188,6 +188,7 @@ public:
         m_thread = std::thread([&]{ process(); });
     }
 
+    void notify();
     void process();
 
     void send(int fd, const MsgPacket& msg);

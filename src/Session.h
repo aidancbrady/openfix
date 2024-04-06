@@ -79,6 +79,8 @@ private:
 
     int populateMessage(Message& msg);
 
+    void internal_update();
+
 private:
     void onMessage(const std::string& msg);
     void processMessage(const Message& msg, long time);

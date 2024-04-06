@@ -233,14 +233,11 @@ public:
         return m_body;
     }
 
-    std::string toString() const
-    {
-        std::ostringstream ostr;
-        ostr << *this;
-        return ostr.str();
-    }
+    std::string toString(bool internal = false) const;
 
 private:
+    void toStream(std::ostream& ostr, char soh_char = EXTERNAL_SOH_CHAR) const;
+
     FieldMap m_header;
     FieldMap m_trailer;
 

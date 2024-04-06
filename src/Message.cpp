@@ -7,7 +7,7 @@
 
 const std::unordered_set<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
 
-std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags)
+std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags, char soh_char)
 {
     std::ostringstream ostr;
 
@@ -19,7 +19,7 @@ std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags)
             if (skipIgnoredTags && IGNORED_TAGS.find(k) != IGNORED_TAGS.end())
                 continue;
 
-            ostr << k << TAG_ASSIGNMENT_CHAR << v << INTERNAL_SOH_CHAR;
+            ostr << k << TAG_ASSIGNMENT_CHAR << v << soh_char;
 
             if (fieldMap.getGroupCount(k) > 0)
                 for (const auto& group : fieldMap.getGroups(k))
@@ -27,7 +27,7 @@ std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags)
         }
 
         if (!skipIgnoredTags && fieldMap.has(FIELD::CheckSum))
-            ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << fieldMap.getField(FIELD::CheckSum) << INTERNAL_SOH_CHAR;
+            ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << fieldMap.getField(FIELD::CheckSum) << soh_char;
     }
 
     return ostr.str();
@@ -35,21 +35,28 @@ std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags)
 
 std::ostream& operator<<(std::ostream& ostr, const FieldMap& fieldMap)
 {
-    ostr << printGroup(fieldMap, false);
+    ostr << printGroup(fieldMap, false, EXTERNAL_SOH_CHAR);
     return ostr;
 }
 
 std::ostream& operator<<(std::ostream& ostr, const Message& msg)
 {
     std::ostringstream ret;
-    auto it = msg.m_header.getFields().find(FIELD::BeginString);
-    if (it != msg.m_header.getFields().end())
-        ret << FIELD::BeginString << TAG_ASSIGNMENT_CHAR << it->second << INTERNAL_SOH_CHAR;
+    msg.toStream(ostr);
+    return ostr;
+}
+
+void Message::toStream(std::ostream& ostr, char soh_char) const
+{
+    std::ostringstream ret;
+    auto it = m_header.getFields().find(FIELD::BeginString);
+    if (it != m_header.getFields().end())
+        ret << FIELD::BeginString << TAG_ASSIGNMENT_CHAR << it->second << soh_char;
     std::string body;
-    body += printGroup(msg.m_header, true);
-    body += printGroup(msg.m_body, true);
-    body += printGroup(msg.m_trailer, true);
-    ret << FIELD::BodyLength << TAG_ASSIGNMENT_CHAR << body.size() << INTERNAL_SOH_CHAR;
+    body += printGroup(m_header, true, soh_char);
+    body += printGroup(m_body, true, soh_char);
+    body += printGroup(m_trailer, true, soh_char);
+    ret << FIELD::BodyLength << TAG_ASSIGNMENT_CHAR << body.size() << soh_char;
     ret << body;
     body = ret.str();
 
@@ -63,8 +70,14 @@ std::ostream& operator<<(std::ostream& ostr, const Message& msg)
         checksumStr = '0' + checksumStr;
 
     ostr << body;
-    ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << checksumStr << INTERNAL_SOH_CHAR;
-    return ostr;
+    ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << checksumStr << soh_char;
+}
+
+std::string Message::toString(bool internal) const
+{
+    std::ostringstream ostr;
+    toStream(ostr, internal ? INTERNAL_SOH_CHAR : EXTERNAL_SOH_CHAR);
+    return ostr.str();
 }
 
 void FieldMap::sortFields()
