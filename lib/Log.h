@@ -1,41 +1,42 @@
 #pragma once
 
 #include <iostream>
+#include <sstream>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 
-enum class LogLevel
+struct Logger
 {
-    TRACE,
-    DEBUG,
-    INFO,
-    WARN,
-    ERROR,
-    FATAL
-};
-
-class LogSettings
-{
-public:
-    static inline LogLevel LOG_LEVEL = LogLevel::TRACE;
-};
-
-class Logger
-{
-public:
-    const std::string& name()
+    static void initialize()
     {
-        return m_name;
+        static bool initialized = false;
+        if (!initialized)
+        {
+            spdlog::set_level(spdlog::level::trace);
+            spdlog::set_pattern("[%H:%M:%S] [%n] [%l] [%t] %v");
+            initialized = true;
+        }
     }
 
-    const std::string& context()
+    static inline std::shared_ptr<spdlog::logger> get_logger(const std::string& name)
     {
-        return m_context;
+        auto logger = spdlog::get(name);
+        if (!logger)
+            return spdlog::stdout_color_mt(name);
+        return logger;
     }
-private:
-    std::string m_name;
-    std::string m_context;
 };
 
-#define CREATE_LOGGER(name) static inline std::string __LOGGER_NAME__ = name;
+#define __LOWER(TOK) __LOWER_ ## TOK
+
+#define __LOWER_TRACE trace
+#define __LOWER_DEBUG debug
+#define __LOWER_INFO info
+#define __LOWER_WARN warn
+#define __LOWER_ERROR error
+#define __LOWER_FATAL critical
+
+#define CREATE_LOGGER(name) static inline std::shared_ptr<spdlog::logger> __LOGGER__ = Logger::get_logger(#name);
 
 #define LOG_TRACE(arg1, ...) __LOG(arg1, ##__VA_ARGS__, TRACE, _EXPLICIT, _IMPLICIT)
 #define LOG_DEBUG(arg1, ...) __LOG(arg1, ##__VA_ARGS__, DEBUG, _EXPLICIT, _IMPLICIT)
@@ -45,9 +46,12 @@ private:
 #define LOG_FATAL(arg1, ...) __LOG(arg1, ##__VA_ARGS__, FATAL, _EXPLICIT, _IMPLICIT)
 
 #define __LOG(arg1, arg2, level, suffix, ...) __LOG##suffix(arg1, arg2, level)
-#define __LOG_IMPLICIT(msg, level, ...) __LOG_IMPL(__LOGGER_NAME__, msg, level)
-#define __LOG_EXPLICIT(logger, msg, level) __LOG_IMPL(logger, msg, level)
+#define __LOG_IMPLICIT(msg, level, ...) __LOG_IMPL(__LOGGER__, msg, level)
+#define __LOG_EXPLICIT(logger, msg, level) __LOG_IMPL(Logger::get_logger(#logger), msg, level)
 
-#define __LOG_IMPL(logger, msg, level)           \
-    { if (LogLevel::level >= LogSettings::LOG_LEVEL)    \
-        std::cout << "[" << #level << "] [" << logger << "] " << msg << std::endl; }
+#define __LOG_IMPL(logger, msg, level)                                                \
+    do {                                                                              \
+        std::ostringstream ostr;                                                      \
+        ostr << msg;                                                                  \
+        logger->__LOWER(level)(ostr.str());                                           \
+    } while (0);

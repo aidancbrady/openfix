@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 #include <mutex>
+#include <list>
 #include <condition_variable>
 #include <unordered_map>
 
@@ -37,7 +38,7 @@ public:
         , m_readerThread(readerThread)
     {}
 
-    void send(const MsgPacket& msg);
+    void send(MsgPacket&& msg);
     void disconnect();
 
     size_t getFD()
@@ -68,7 +69,7 @@ public:
     void stop();
 
     void processMessage(const std::string& msg);
-    void send(const MsgPacket& msg);
+    void send(MsgPacket&& msg);
 
     void disconnect();
     void setConnection(std::shared_ptr<ConnectionHandle> connection);
@@ -172,10 +173,23 @@ struct WriteBuffer
         m_buffer.reserve(WRITE_BUF_SIZE);
     }
 
+    struct MsgMetadata
+    {
+        MsgMetadata(MsgPacket&& packet)
+        {
+            m_callback = std::move(packet.m_callback);
+            m_msg_size = packet.m_msg.size();
+        }
+
+        SendCallback_T m_callback;
+        size_t m_msg_size;
+    };
+
     std::string m_queue;
     std::string m_buffer;
 
-    tbb::concurrent_queue<SendCallback_T> m_sendCallbacks;
+    std::list<MsgMetadata> m_meta_queue;
+    std::list<MsgMetadata> m_meta_buffer;
 };
 
 class WriterThread
@@ -191,7 +205,8 @@ public:
     void notify();
     void process();
 
-    void send(int fd, const MsgPacket& msg);
+    void send(int fd, MsgPacket&& msg);
+    void disconnect(int fd);
 
     void stop();
 

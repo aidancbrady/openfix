@@ -55,6 +55,15 @@ bool try_make_non_blocking(int fd)
     return true;
 }
 
+bool set_sock_opt(int fd, int optname)
+{
+    int enable = 1;
+    if (setsockopt(fd, SOL_SOCKET, optname, &enable, sizeof(enable)) < 0) {
+        LOG_ERROR("NetUtils", "Failed to set socket option " << optname << ": " << std::string(strerror(errno)));
+    }
+    return true;
+}
+
 void Network::start()
 {
     if (m_running.load(std::memory_order_acquire))
@@ -252,6 +261,12 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
             return false;
         }
 
+        if (!set_sock_opt(fd, SO_REUSEADDR))
+        {
+            ::close(fd);
+            return false;
+        }
+
         LOG_DEBUG("Created server socket on port " << port << " with fd=" << fd);
 
         struct sockaddr_in addr;
@@ -262,14 +277,14 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
         if (::bind(fd, (const struct sockaddr *) &addr, sizeof(addr)) < 0) 
         {
             LOG_ERROR("Couldn't bind to port: " << strerror(errno));
-            close(fd);
+            ::close(fd);
             return false;
         }
 
         if (::listen(fd, ACCEPTOR_BACKLOG) < 0) 
         {
             LOG_ERROR("Couldn't listen to accept port: " << strerror(errno));
-            close(fd);
+            ::close(fd);
             return false;
         }
 
@@ -383,6 +398,7 @@ void Network::run()
                     LOG_INFO("disconnect callback for fd=" << fd);
                     // connection hangup
                     m_readerThreads[fd % m_readerThreadCount]->disconnect(fd);
+                    m_writerThreads[fd % m_writerThreadCount]->disconnect(fd);
                 }
             }
         }
@@ -402,7 +418,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
 
     if (!try_make_non_blocking(fd))
     {
-        close(fd);
+        ::close(fd);
         return false;
     }
 
@@ -410,7 +426,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) 
     {
         LOG_WARN("Failed to parse incoming connection IP address: " << ::strerror(errno));
-        close(fd);
+        ::close(fd);
         return false;
     }
 
@@ -423,7 +439,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
     {
         LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
-        close(fd);
+        ::close(fd);
         return false;
     }
 
@@ -452,8 +468,9 @@ void ReaderThread::queue(int fd)
 void ReaderThread::disconnect(int fd)
 {
     std::lock_guard lock(m_mutex);
+    // immediately close the socket
+    ::close(fd);
     m_buffer.clear(fd);
-    close(fd);
     auto it = m_connections.find(fd);
     if (m_connections.find(fd) != m_connections.end())
     {
@@ -545,7 +562,7 @@ void ReaderThread::process(int fd)
                 if (sender_comp.first.empty())
                 {
                     LOG_ERROR("Received message without SenderCompID");
-                    close(fd);
+                    ::close(fd);
                     return;
                 }
 
@@ -553,7 +570,7 @@ void ReaderThread::process(int fd)
                 if (target_comp.first.empty())
                 {
                     LOG_ERROR("Received message without TargetCompID");
-                    close(fd);
+                    ::close(fd);
                     return;
                 }
 
@@ -567,7 +584,16 @@ void ReaderThread::process(int fd)
                     return;
                 }
 
+                // make sure this session isn't already connected
+                if (consumerIt->second->isConnected())
+                {
+                    LOG_ERROR("Received connection from already-connected session: " << cpty);
+                    ::close(fd);
+                    return;
+                }
+
                 // create new connection
+                LOG_INFO("Associating fd=" << fd << " with session: " << cpty);
                 addConnection(consumerIt->second, fd);
 
                 for (const auto& msg : msgs)
@@ -598,16 +624,18 @@ void ReaderThread::stop()
 
     // close open connections
     for (const auto& [k, conn] : m_connections) {
-        close(k);
+        ::close(k);
         // proper cleanup - maybe improve this in the future
         conn->setConnection(nullptr);
     }
     // close unknown connections
     for (const auto& [k, _] : m_unknownConnections)
-        close(k);
+        ::close(k);
     // close acceptor sockets
-    for (const auto& [k, _] : m_acceptorSockets)
-        close(k);
+    for (const auto& [k, _] : m_acceptorSockets) {
+        LOG_DEBUG("Closing acceptor socket, fd=" << k);
+        ::close(k);
+    }
 
     m_connections.clear();
     m_unknownConnections.clear();
@@ -767,6 +795,8 @@ void WriterThread::process()
                 std::lock_guard lock(m_mutex);
                 if (!buffer.m_queue.empty())
                     buffer.m_queue.swap(buffer.m_buffer);
+                if (!buffer.m_meta_queue.empty())
+                    buffer.m_meta_queue.swap(buffer.m_meta_buffer);
             }
 
             if (buffer.m_buffer.empty())
@@ -778,10 +808,35 @@ void WriterThread::process()
                 ssize_t ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent, MSG_NOSIGNAL);
                 if (ret < 0) 
                 {
-                    LOG_ERROR("Failed to send on fd=" << fd << ": " << std::string(strerror(errno)));
+                    if (errno != EAGAIN && errno != EWOULDBLOCK)
+                    {
+                        LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
+                        buffer.m_buffer.clear();
+                        buffer.m_meta_buffer.clear();
+                        break;
+                    }
                     break;
                 }
                 sent += ret;
+            }
+
+            if (!buffer.m_meta_buffer.empty())
+            {
+                size_t processed = 0;
+
+                while (!buffer.m_meta_buffer.empty() && processed + buffer.m_meta_buffer.front().m_msg_size <= sent) 
+                {
+                    processed += buffer.m_meta_buffer.front().m_msg_size;
+                    if (buffer.m_meta_buffer.front().m_callback)
+                        buffer.m_meta_buffer.front().m_callback();
+                    buffer.m_meta_buffer.erase(buffer.m_meta_buffer.begin());
+                }
+
+                // if sent bytes did not complete the next message and partial data remains
+                if (processed < sent && !buffer.m_meta_buffer.empty())
+                {
+                    buffer.m_meta_buffer.front().m_msg_size -= (sent - processed);
+                }
             }
 
             if (sent < buffer.m_buffer.length())
@@ -789,30 +844,29 @@ void WriterThread::process()
                 // Not all data was sent; store the unsent part back in m_queue for later.
                 std::lock_guard lock(m_mutex);
                 buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
-                buffer.m_buffer.clear();
             }
-            else
-            {
-                // process callbacks
-                SendCallback_T callback;
-                while (buffer.m_sendCallbacks.try_pop(callback) && callback)
-                    callback();
 
-                buffer.m_buffer.clear();
-            }
+            buffer.m_buffer.clear();
         }
     }
 }
 
-void WriterThread::send(int fd, const MsgPacket& msg)
+void WriterThread::send(int fd, MsgPacket&& msg)
 {
     {
         std::lock_guard lock(m_mutex);
         m_bufferMap[fd].m_queue.append(msg.m_msg);
-        m_bufferMap[fd].m_sendCallbacks.push(std::move(msg.m_callback));
+        m_bufferMap[fd].m_meta_queue.push_back(std::move(msg));
     }
     
     m_cv.notify_one();
+}
+
+void WriterThread::disconnect(int fd)
+{
+    std::lock_guard lock(m_mutex);
+    LOG_DEBUG("Disconnect received for fd=" << fd << ", clearing send buffer");
+    m_bufferMap.erase(fd);
 }
 
 void WriterThread::stop()
@@ -822,6 +876,7 @@ void WriterThread::stop()
         m_running.store(false, std::memory_order_release);
     }
 
+    m_bufferMap.clear();
     m_cv.notify_one();
 }
 
@@ -832,11 +887,12 @@ void WriterThread::stop()
 void ConnectionHandle::disconnect()
 {
     m_readerThread.disconnect(m_fd);
+    m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->disconnect(m_fd);
 }
 
-void ConnectionHandle::send(const MsgPacket& msg)
+void ConnectionHandle::send(MsgPacket&& msg)
 {
-    m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->send(m_fd, msg);
+    m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->send(m_fd, std::move(msg));
 }
 
 ////////////////////////////////////////////
@@ -887,11 +943,11 @@ void NetworkHandler::processMessage(const std::string& msg)
     m_callback(msg);
 }
 
-void NetworkHandler::send(const MsgPacket& msg)
+void NetworkHandler::send(MsgPacket&& msg)
 {
     std::lock_guard lock(m_mutex);
     if (m_connection)
-        m_connection->send(msg);
+        m_connection->send(std::move(msg));
 }
 
 void NetworkHandler::disconnect()

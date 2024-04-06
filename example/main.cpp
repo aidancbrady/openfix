@@ -9,6 +9,8 @@
 
 int main(int argc, char** argv)
 {
+    Logger::initialize();
+    
     if (argc != 2)
         throw std::runtime_error("usage: app <acceptor | initiator>");
     

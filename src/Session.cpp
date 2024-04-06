@@ -51,7 +51,7 @@ void Session::onMessage(const std::string& text)
             // parse message
             auto msg = m_dictionary->parse(m_settings, text);
 
-            LOG_DEBUG("Parsed: " << msg);
+            LOG_DEBUG("Received: " << msg);
 
             auto time = Utils::getEpochMillis();
             m_lastRecvHeartbeat = time;
