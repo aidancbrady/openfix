@@ -8,7 +8,7 @@ cc_library(
     hdrs = glob(["*.h", "lib/*.h"]),
     srcs = glob(["*.cpp", "lib/*.cpp"]),
     deps = [
-        "//lib:openfix_lib",
+        "//lib:openfix-lib",
         "@pugixml//:pugixml",
         "@oneTBB//:tbb"
     ]

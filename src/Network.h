@@ -79,7 +79,7 @@ private:
     Network& m_network;
     MessageCallback_T m_callback;
 
-    std::mutex m_mutex;
+    std::recursive_mutex m_mutex;
     std::shared_ptr<ConnectionHandle> m_connection;
 
     CREATE_LOGGER("Network");
@@ -108,7 +108,6 @@ public:
 
 private:
     std::unordered_map<int, std::string> m_bufferMap;
-    char m_buffer[READ_BUF_SIZE];
 
     CREATE_LOGGER("ReadBuffer");
 };

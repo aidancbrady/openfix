@@ -19,21 +19,36 @@ Dispatcher::~Dispatcher()
     for (auto& worker : m_workers)
         worker->stop();
     for (auto& worker : m_workers)
-        worker->m_thread.join();
+        if (worker->m_thread.joinable())
+            worker->m_thread.join();
 }
 
 void Worker::run()
 {
     while (!m_stop.load(std::memory_order_acquire))
     {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        m_cv.wait(lock, [&]() {
-            return m_stop.load() || !m_queue.empty();
-        });
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_cv.wait(lock, [&]() {
+                return m_stop.load() || !m_queue.empty();
+            });
+        }
+
+        if (m_stop.load())
+            return;
         Callback task;
         if (m_queue.try_pop(task))
             task();
     }
+}
+
+void Worker::dispatch(Callback&& callback)
+{
+    {
+        std::lock_guard lock(m_mutex);
+        m_queue.push(callback);
+    }
+    m_cv.notify_one();
 }
 
 void Worker::stop()
@@ -50,7 +65,7 @@ void Dispatcher::dispatch(Callback callback)
 
 void Dispatcher::dispatch(Callback callback, int hash)
 {
-    m_workers[hash % m_workers.size()]->m_queue.push(std::move(callback));
+    m_workers[hash % m_workers.size()]->dispatch(std::move(callback));
 }
 
 ////////////////////////////////////////////

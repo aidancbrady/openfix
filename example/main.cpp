@@ -1,4 +1,5 @@
 #include <openfix/Application.h>
+#include <openfix/SignalHandler.h>
 
 #include <memory>
 #include <iostream>
@@ -8,10 +9,15 @@
 
 int main(int argc, char** argv)
 {
+    if (argc != 2)
+        throw std::runtime_error("usage: app <acceptor | initiator>");
+    
     Application app;
+    SessionSettings settings;
 
+    if (strcasecmp("acceptor", argv[1]) == 0)
     {
-        SessionSettings settings;
+        std::cout << "starting acceptor" << std::endl;
         settings.setString(SessionSettings::SESSION_TYPE_STR, "acceptor");
         settings.setString(SessionSettings::BEGIN_STRING, "FIX.4.2");
         settings.setString(SessionSettings::SENDER_COMP_ID, "ACCEPTOR");
@@ -21,8 +27,9 @@ int main(int argc, char** argv)
 
         app.createSession("TEST_ACCEPTOR", settings);
     }
+    else if (strcasecmp("initiator", argv[1]) == 0)
     {
-        SessionSettings settings;
+        std::cout << "starting initiator" << std::endl;
         settings.setString(SessionSettings::SESSION_TYPE_STR, "initiator");
         settings.setString(SessionSettings::BEGIN_STRING, "FIX.4.2");
         settings.setString(SessionSettings::SENDER_COMP_ID, "INITIATOR");
@@ -33,7 +40,13 @@ int main(int argc, char** argv)
 
         app.createSession("TEST_INITIATOR", settings);
     }
+    else {
+        throw std::runtime_error("unknown type: " + std::string(argv[1]));
+    }
  
     app.start();
-    ::usleep(1000'000'000);
+
+    SignalHandler::static_wait();
+
+    return EXIT_SUCCESS;
 }

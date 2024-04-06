@@ -54,13 +54,13 @@ std::ostream& operator<<(std::ostream& ostr, const Message& msg)
     body = ret.str();
 
     // get checksum
-    std::string checksumStr;
     int checksum = 0;
     for (char c : body)
         checksum += c;
     checksum %= 256;
-    for (int tmp = checksum; tmp < 100; checksumStr += "0", tmp *= 10);
-    checksumStr += std::to_string(checksum);
+    auto checksumStr = std::to_string(checksum);
+    while (checksumStr.size() < 3)
+        checksumStr = '0' + checksumStr;
 
     ostr << body;
     ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << checksumStr << INTERNAL_SOH_CHAR;

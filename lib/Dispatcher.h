@@ -21,10 +21,15 @@ class Dispatcher;
 class Worker
 {
 public:
-    Worker() : m_stop(false) {}
+    Worker() 
+        : m_stop(false) 
+    {
+        m_thread = std::thread([this]{ run(); });
+    }
 
     void run();
     void stop();
+    void dispatch(Callback&& callback);
 
 private:
     std::mutex m_mutex;

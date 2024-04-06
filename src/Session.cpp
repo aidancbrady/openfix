@@ -40,35 +40,33 @@ void Session::stop()
 
 void Session::onMessage(const std::string& text)
 {
-    // lock whenever we're processing a message
-    std::lock_guard<std::mutex> lock(m_mutex);
+    dispatcher.dispatch([this, text]{
+        LOG_DEBUG("Received message: " << text);
 
-    LOG_DEBUG("Received message: " << text);
+        if (m_state == SessionState::KILLING)
+        {
+            LOG_WARN("Received message while killing session, ignoring");
+            return;
+        }
 
-    if (m_state == SessionState::KILLING)
-    {
-        LOG_WARN("Received message while killing session, ignoring");
-        return;
-    }
+        // parse message
+        auto msg = m_dictionary->parse(m_settings, text);
 
-    // parse message
-    auto msg = m_dictionary->parse(m_settings, text);
+        auto time = Utils::getEpochMillis();
+        m_lastRecvHeartbeat = time;
 
-    auto time = Utils::getEpochMillis();
-    m_lastRecvHeartbeat = time;
+        processMessage(msg, time);
 
-    processMessage(msg, time);
-
-    // handle inbound queue
-    auto& queue = m_cache->getInboundQueue();
-    while (!queue.empty() && getTargetSeqNum() == queue.begin()->first)
-    {
-        processMessage(queue.begin()->second, time);
-        queue.erase(queue.begin());
-    }
+        // handle inbound queue
+        auto& queue = m_cache->getInboundQueue();
+        while (!queue.empty() && getTargetSeqNum() == queue.begin()->first)
+        {
+            processMessage(queue.begin()->second, time);
+            queue.erase(queue.begin());
+        }
+    });
 }
 
-/* MUTEX LOCKED */
 void Session::processMessage(const Message& msg, long time)
 {
     auto msgType = msg.getHeader().getField(FIELD::MsgType);
@@ -143,58 +141,58 @@ void Session::send(Message& msg, SendCallback_T callback)
 
 void Session::runUpdate()
 {
-    // lock during our update loop
-    std::lock_guard<std::mutex> lock(m_mutex);
-    LOG_TRACE("session update " << m_settings.getSessionID() << " " << m_network->isConnected());
-    
-    long time = Utils::getEpochMillis();
+    dispatcher.dispatch([this]{
+        LOG_TRACE("session update " << m_settings.getSessionID() << " " << m_network->isConnected());
+        
+        long time = Utils::getEpochMillis();
 
-    if (!m_network->isConnected())
-    {
-        if ((time - m_lastReconnect) >= m_reconnectInterval)
+        if (!m_network->isConnected())
         {
-            m_network->start();
-            m_lastReconnect = time;
+            if ((time - m_lastReconnect) >= m_reconnectInterval)
+            {
+                m_network->start();
+                m_lastReconnect = time;
+            }
+
+            return;
         }
 
-        return;
-    }
-
-    if (m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
-    {
-        sendLogon();
-        return;
-    }
-
-    if (m_state == SessionState::TEST_REQUEST)
-    {
-        if ((time - m_lastRecvHeartbeat) >= m_heartbeatInterval)
+        if (m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
         {
-            terminate("Failed to respond to test request " + std::to_string(m_testReqID) + " within heartbeat interval");
-        }
-    }
-
-    if (m_state == SessionState::LOGOUT)
-    {
-        if ((time - m_logoutTime) >= 2 * m_heartbeatInterval)
-        {
-            terminate("Didn't receive logout ack in time");
-        }
-    }
-
-    if (m_state != SessionState::LOGON && m_state != SessionState::LOGOUT)
-    {
-        if ((time - m_lastSentHeartbeat) >= m_heartbeatInterval)
-        {
-            sendHeartbeat(time);
+            sendLogon();
+            return;
         }
 
-        long heartbeatTimeout = static_cast<long>(m_settings.getDouble(SessionSettings::TEST_REQUEST_THRESHOLD) * m_heartbeatInterval);
-        if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout)
+        if (m_state == SessionState::TEST_REQUEST)
         {
-            sendTestRequest();
+            if ((time - m_lastRecvHeartbeat) >= m_heartbeatInterval)
+            {
+                terminate("Failed to respond to test request " + std::to_string(m_testReqID) + " within heartbeat interval");
+            }
         }
-    }
+
+        if (m_state == SessionState::LOGOUT)
+        {
+            if ((time - m_logoutTime) >= 2 * m_heartbeatInterval)
+            {
+                terminate("Didn't receive logout ack in time");
+            }
+        }
+
+        if (m_state != SessionState::LOGON && m_state != SessionState::LOGOUT)
+        {
+            if ((time - m_lastSentHeartbeat) >= m_heartbeatInterval)
+            {
+                sendHeartbeat(time);
+            }
+
+            long heartbeatTimeout = static_cast<long>(m_settings.getDouble(SessionSettings::TEST_REQUEST_THRESHOLD) * m_heartbeatInterval);
+            if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout)
+            {
+                sendTestRequest();
+            }
+        }
+    });
 }
 
 void Session::handleLogon(const Message& msg)

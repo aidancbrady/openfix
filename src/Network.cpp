@@ -112,6 +112,9 @@ void Network::stop()
 
 bool Network::connect(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler)
 {
+    if (!m_running.load(std::memory_order_acquire))
+        return false;
+        
     std::string hostname = settings.getString(SessionSettings::CONNECT_HOST);
     int port = settings.getLong(SessionSettings::CONNECT_PORT);
 
@@ -172,7 +175,7 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
                     char host[NI_MAXHOST], service[NI_MAXSERV];
                     if (getnameinfo(addr->ai_addr, addr->ai_addrlen, host, sizeof(host), service, sizeof(service), NI_NUMERICHOST | NI_NUMERICSERV) == 0) 
                     {
-                        LOG_INFO("Successful connection to " << host << ":" << service);
+                        LOG_INFO("Successful connection to " << host << ":" << service << " on fd=" << fd);
                     } 
                     else 
                     {
@@ -191,17 +194,36 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
 
     ::freeaddrinfo(ret);
 
-    if (connected && !m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd))
+    if (connected)
     {
-        close(fd);
-        return false;
+        if (!m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd))
+        {
+            close(fd);
+            return false;
+        }
+
+        struct epoll_event event;
+        event.events = EPOLLIN | EPOLLRDHUP; // edge triggered one day
+        event.data.fd = fd;
+
+        if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
+        {
+            LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
+            close(fd);
+            return false;
+        }
+
+        return true;
     }
 
-    return connected;
+    return false;
 }
 
 bool Network::hasAcceptor(const SessionSettings& settings)
 {
+    if (!m_running.load(std::memory_order_acquire))
+        return false;
+
     std::lock_guard lock(m_mutex);
     int port = settings.getLong(SessionSettings::ACCEPT_PORT);
     auto it = m_acceptors.find(port);
@@ -212,6 +234,9 @@ bool Network::hasAcceptor(const SessionSettings& settings)
 
 bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler)
 {
+    if (!m_running.load(std::memory_order_acquire))
+        return false;
+        
     // acceptors should be created/destroyed atomically
     std::lock_guard lock(m_mutex);
 
@@ -249,7 +274,7 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
         }
 
         struct epoll_event event;
-        event.events = EPOLLIN | EPOLLET;
+        event.events = EPOLLIN | EPOLLET; // server socket should only notify once (ET)
         event.data.fd = fd;
 
         if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) 
@@ -269,6 +294,9 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
 
 bool Network::removeAcceptor(const SessionSettings& settings)
 {
+    if (!m_running.load(std::memory_order_acquire))
+        return false;
+
     // acceptors should be created/destroyed atomically
     std::lock_guard lock(m_mutex);
 
@@ -352,7 +380,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     std::string address = std::string(ip) + ":" + std::to_string(::ntohs(addr.sin_port));
 
     struct epoll_event event;
-    event.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
+    event.events = EPOLLIN | EPOLLRDHUP; // edge triggered one day
     event.data.fd = fd;
 
     if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
@@ -388,9 +416,11 @@ void ReaderThread::disconnect(int fd)
 {
     std::lock_guard lock(m_mutex);
     m_buffer.clear(fd);
+    close(fd);
     auto it = m_connections.find(fd);
     if (m_connections.find(fd) != m_connections.end())
     {
+        LOG_DEBUG("Disconnecting known connection, fd=" << fd);
         it->second->setConnection(nullptr);
         m_connections.erase(fd);
         return;
@@ -398,6 +428,7 @@ void ReaderThread::disconnect(int fd)
     
     if (m_unknownConnections.find(fd) != m_unknownConnections.end())
     {
+        LOG_DEBUG("Disconnecting unknown connection, fd=" << fd);
         m_unknownConnections.erase(fd);
         return;
     }
@@ -524,8 +555,11 @@ void ReaderThread::stop()
     m_cv.notify_one();
 
     // close open connections
-    for (const auto& [k, _] : m_connections)
+    for (const auto& [k, conn] : m_connections) {
         close(k);
+        // proper cleanup - maybe improve this in the future
+        conn->setConnection(nullptr);
+    }
     // close unknown connections
     for (const auto& [k, _] : m_unknownConnections)
         close(k);
@@ -593,17 +627,25 @@ std::vector<std::string> ReadBuffer::read(int fd)
     std::string& buffer = it->second;
 
     // TODO handle errors here and potentially move to ET mode
-    int bytes = ::recv(fd, m_buffer, sizeof(m_buffer), 0);
-    if (bytes <= 0)
-        ; // TODO error
-    buffer.append(m_buffer, bytes);
+    char read_buffer[READ_BUF_SIZE];
+    int bytes = ::recv(fd, read_buffer, sizeof(read_buffer), 0);
+    
+    if (bytes <= 0) {
+        if (bytes == -1)
+            LOG_ERROR("Error reading from socket: " << std::string(strerror(errno)));
+        buffer.clear();
+        return ret;
+    }
 
-    LOG_INFO(buffer);
+    buffer.append(read_buffer, bytes);
 
     // parse all the messages we can
     size_t ptr = 0;
     while (true)
     {
+        ptr = 0;
+        LOG_INFO(buffer);
+
         // find beginning of message
         ptr = buffer.find(BEGIN_STRING_TAG, ptr);
         if (ptr == std::string::npos)

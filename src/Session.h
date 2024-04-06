@@ -10,6 +10,7 @@
 #include "Fields.h"
 
 #include <openfix/Log.h>
+#include <openfix/Dispatcher.h>
 
 #include <memory>
 #include <atomic>
@@ -116,7 +117,8 @@ private:
     std::unique_ptr<IFIXCache> m_cache;
 
     std::atomic<bool> m_enabled;
-    std::mutex m_mutex;
+
+    Dispatcher dispatcher;
 
     long m_lastSentHeartbeat = 0;
     long m_lastRecvHeartbeat = 0;

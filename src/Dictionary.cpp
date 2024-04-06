@@ -103,6 +103,10 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     for (size_t i = 0; i < text.size(); ++i)
     {
         char c = text[i];
+
+        if (i == text.size()-1 && c != INTERNAL_SOH_CHAR)
+            TRY_LOG_THROW("Message does not end in SOH character");
+
         if (i < text.size() - 7)
             checksum += c;
         if (c == INTERNAL_SOH_CHAR)
@@ -126,7 +130,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 if (getFieldType(tag) == FieldType::LENGTH)
                 {
                     try {
-                        dataLength = static_cast<size_t>(std::atoi(val.c_str()));
+                        dataLength = static_cast<size_t>(std::stoi(val.c_str()));
                     } catch (...) {
                         TRY_LOG_THROW("Couldn't parse data field (tag=" << tag << ")");
                     }
@@ -196,7 +200,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                     newGroup.m_groupCount = 1;
 
                     try {
-                        newGroup.m_groupMaxCount = std::atoi(value.c_str());
+                        newGroup.m_groupMaxCount = std::stoi(value.c_str());
                     } catch (...) {
                         TRY_LOG_THROW("Couldn't parse NumInGroup (tag=" << tag << ")");
                         return -1;
@@ -296,7 +300,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             state = ParserState::VAL;
 
             try {
-                tag = std::atoi(key.c_str());
+                tag = std::stoi(key.c_str());
             } catch (...) {
                 TRY_LOG_THROW("Tag not int (tag=" << tag << ")");
                 fail = true;
@@ -317,7 +321,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 if (getFieldType(tag) == FieldType::DATA)
                 {
                     if (i + dataLength >= text.size())
-                    TRY_LOG_THROW("Data tag length would exceed message size");
+                        TRY_LOG_THROW("Data tag length would exceed message size");
                     for (size_t j = 0; j < static_cast<size_t>(dataLength); ++j)
                         value += text[i + j + 1];
                     curGroup().setField(tag, value);
@@ -364,7 +368,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
         // verify bodylength
         auto expectedLength = text.size() - bodyLengthStart - 7;
         try {
-            auto bodyLength = static_cast<unsigned long>(std::atol(ret.getHeader().getField(FIELD::BodyLength).c_str()));
+            auto bodyLength = static_cast<unsigned long>(std::stol(ret.getHeader().getField(FIELD::BodyLength).c_str()));
             if (expectedLength != bodyLength)
                 throw std::exception();
         } catch (...) {
@@ -379,10 +383,9 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
         else
         {
             checksum %= 256;
-            std::string checksumStr = "";
-            // trailing zeros
-            for (int tmp = checksum; tmp < 100; checksumStr += "0", tmp *= 10);
-            checksumStr += std::to_string(checksum);
+            std::string checksumStr = std::to_string(checksum);
+            while (checksumStr.size() < 3)
+                checksumStr = '0' + checksumStr;
 
             if (tag != FIELD::CheckSum)
                 TRY_LOG_THROW("Message didn't end in checksum");
