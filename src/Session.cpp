@@ -144,6 +144,7 @@ void Session::send(Message& msg, SendCallback_T callback)
 {
     int seqnum = populateMessage(msg);
     m_cache->cache(seqnum, msg);
+    m_cache->nextSenderSeqNum();
     m_network->send({msg.toString(), callback});
 }
 
@@ -240,6 +241,8 @@ void Session::handleLogon(const Message& msg)
         sendResendRequest(m_cache->getTargetSeqNum(), 0);
         return;
     }
+
+    m_cache->nextTargetSeqNum();
 }
 
 void Session::handleResendRequest(const Message& msg)
@@ -405,7 +408,7 @@ bool Session::load()
 
 int Session::populateMessage(Message& msg)
 {
-    int seqnum = m_cache->nextSenderSeqNum();
+    int seqnum = m_cache->getSenderSeqNum();
 
     msg.getHeader().setField(FIELD::BeginString, m_settings.getString(SessionSettings::BEGIN_STRING));
     msg.getHeader().setField(FIELD::SenderCompID, m_settings.getString(SessionSettings::SENDER_COMP_ID));
