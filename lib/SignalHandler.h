@@ -1,8 +1,8 @@
 #pragma once
 
-#include <csignal>
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <thread>
 
 #include "Log.h"

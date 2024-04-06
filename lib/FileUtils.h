@@ -1,14 +1,14 @@
 #pragma once
 
-#include "Log.h"
-
-#include <string>
+#include <atomic>
+#include <condition_variable>
 #include <fstream>
 #include <mutex>
+#include <string>
 #include <thread>
-#include <condition_variable>
-#include <atomic>
 #include <unordered_map>
+
+#include "Log.h"
 
 // 1KB write buffer
 #define BUF_SIZE 1024
@@ -18,7 +18,7 @@ class FileWriter;
 class WriterInstance
 {
 public:
-    explicit WriterInstance(std::string path, std::condition_variable& cv) 
+    explicit WriterInstance(std::string path, std::condition_variable& cv)
         : m_path(std::move(path))
         , m_cv(cv)
     {

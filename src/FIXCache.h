@@ -1,11 +1,11 @@
 #pragma once
 
-#include "Message.h"
-#include "Dictionary.h"
-#include "FIXStore.h"
-
 #include <map>
 #include <memory>
+
+#include "Dictionary.h"
+#include "FIXStore.h"
+#include "Message.h"
 
 class IFIXCache
 {
@@ -52,14 +52,14 @@ public:
     std::map<int, Message>& getInboundQueue() override;
 
     void load() override;
-    
+
 private:
     const SessionSettings& m_settings;
     std::shared_ptr<Dictionary> m_dictionary;
 
     int m_senderSeqNum;
     int m_targetSeqNum;
-    
+
     std::map<int, Message> m_messages;
 
     std::recursive_mutex m_mutex;

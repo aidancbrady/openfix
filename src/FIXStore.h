@@ -1,12 +1,12 @@
 #pragma once
 
-#include "Config.h"
-
-#include <openfix/Log.h>
 #include <openfix/FileUtils.h>
+#include <openfix/Log.h>
 
-#include <map>
 #include <functional>
+#include <map>
+
+#include "Config.h"
 
 struct SessionData
 {
@@ -30,11 +30,9 @@ public:
     SessionData load();
 
 private:
-    StoreHandle(const SessionSettings& settings, WriteFunction writeFunc, std::string path)
-        : m_settings(settings)
-        , m_writeFunc(std::move(writeFunc))
-        , m_path(std::move(path))
-    {}
+    StoreHandle(const SessionSettings& settings, WriteFunction writeFunc, std::string path) : m_settings(settings), m_writeFunc(std::move(writeFunc)), m_path(std::move(path))
+    {
+    }
 
     void write(const std::string& msg)
     {

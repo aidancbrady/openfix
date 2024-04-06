@@ -1,17 +1,17 @@
 #pragma once
 
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
+
 #include <iostream>
 #include <sstream>
-#include <spdlog/spdlog.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
 
 struct Logger
 {
     static void initialize()
     {
         static bool initialized = false;
-        if (!initialized)
-        {
+        if (!initialized) {
             spdlog::set_level(spdlog::level::trace);
             spdlog::set_pattern("[%H:%M:%S] [%n] [%l] [%t] %v");
             initialized = true;

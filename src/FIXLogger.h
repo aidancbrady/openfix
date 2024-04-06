@@ -1,24 +1,20 @@
 #pragma once
 
-#include "Message.h"
-#include "Config.h"
-
-#include <openfix/Log.h>
 #include <openfix/FileUtils.h>
+#include <openfix/Log.h>
 
 #include <atomic>
-#include <mutex>
-#include <thread>
-#include <memory>
 #include <condition_variable>
 #include <fstream>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
 
-enum class Direction
-{
-    INBOUND,
-    OUTBOUND
-};
+#include "Config.h"
+#include "Message.h"
+
+enum class Direction { INBOUND, OUTBOUND };
 
 using LoggerFunction = std::function<void(const std::string& msg)>;
 
@@ -31,7 +27,7 @@ public:
 
     virtual void start() = 0;
     virtual void stop() = 0;
-    
+
     virtual LoggerHandle createLogger(const SessionSettings& settings) = 0;
 
 protected:
@@ -53,7 +49,8 @@ public:
 
 private:
     LoggerHandle(LoggerFunction evtLogger, LoggerFunction msgLogger)
-        : m_eventLogger(std::move(evtLogger)), m_msgLogger(std::move(msgLogger))
+        : m_eventLogger(std::move(evtLogger))
+        , m_msgLogger(std::move(msgLogger))
     {}
 
     LoggerFunction m_eventLogger;
@@ -72,7 +69,7 @@ public:
     void stop() override;
 
     LoggerHandle createLogger(const SessionSettings& settings) override;
-    
+
 private:
     FileWriter m_writer;
 

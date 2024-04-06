@@ -1,9 +1,9 @@
 #include "Message.h"
 
-#include "Fields.h"
-
-#include <unordered_set>
 #include <functional>
+#include <unordered_set>
+
+#include "Fields.h"
 
 const std::unordered_set<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
 
@@ -11,10 +11,8 @@ std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags, char soh_
 {
     std::ostringstream ostr;
 
-    if (!fieldMap.empty())
-    {
-        for (const auto& [k, v] : fieldMap.getFields())
-        {
+    if (!fieldMap.empty()) {
+        for (const auto& [k, v] : fieldMap.getFields()) {
             // skip ignored tags
             if (skipIgnoredTags && IGNORED_TAGS.find(k) != IGNORED_TAGS.end())
                 continue;
@@ -97,9 +95,7 @@ void FieldMap::sortFields()
     std::vector<std::pair<int, std::string>> entries;
     for (const auto& entry : m_fields)
         entries.emplace_back(entry);
-    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b){
-        return a.first < b.first;
-    });
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     for (const auto& entry : entries) {
         newFields.insert(entry);
     }

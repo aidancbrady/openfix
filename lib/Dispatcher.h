@@ -1,17 +1,17 @@
 #pragma once
 
-#include "Log.h"
-
 #include <oneapi/tbb/concurrent_queue.h>
 
-#include <thread>
 #include <atomic>
-#include <vector>
-#include <mutex>
-#include <functional>
-#include <unordered_map>
 #include <condition_variable>
+#include <functional>
 #include <map>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+#include "Log.h"
 
 using TimerID = uint32_t;
 using Callback = std::function<void()>;
@@ -21,10 +21,10 @@ class Dispatcher;
 class Worker
 {
 public:
-    Worker() 
-        : m_stop(false) 
+    Worker()
+        : m_stop(false)
     {
-        m_thread = std::thread([this]{ run(); });
+        m_thread = std::thread([this] { run(); });
     }
 
     void run();
@@ -46,7 +46,9 @@ private:
 class Dispatcher
 {
 public:
-    Dispatcher() : Dispatcher(1) {}
+    Dispatcher()
+        : Dispatcher(1)
+    {}
     Dispatcher(size_t threadCount);
 
     ~Dispatcher();
@@ -62,10 +64,10 @@ private:
 
 struct TimerEvent
 {
-    TimerEvent(Callback callback, uint64_t interval) 
+    TimerEvent(Callback callback, uint64_t interval)
         : m_callback(std::move(callback))
         , m_repeating(true)
-        , m_interval(interval) 
+        , m_interval(interval)
     {}
 
     TimerEvent& repeating(bool repeating)

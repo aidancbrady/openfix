@@ -3,7 +3,7 @@
 #include <list>
 #include <unordered_map>
 
-template<typename K, typename V>
+template <typename K, typename V>
 class LinkedHashMap
 {
     using value_type = std::pair<K, V>;
@@ -12,7 +12,7 @@ class LinkedHashMap
 
     using map_type = std::unordered_map<K, list_iterator>;
 
-    template<typename IteratorType>
+    template <typename IteratorType>
     class BaseIterator
     {
         using value_type = typename std::iterator_traits<IteratorType>::value_type;
@@ -23,7 +23,9 @@ class LinkedHashMap
         IteratorType m_it;
 
     public:
-        explicit BaseIterator(IteratorType it) : m_it(it) {}
+        explicit BaseIterator(IteratorType it)
+            : m_it(it)
+        {}
 
         BaseIterator& operator++()
         {
@@ -31,22 +33,22 @@ class LinkedHashMap
             return *this;
         }
 
-        bool operator==(const BaseIterator& other) const 
+        bool operator==(const BaseIterator& other) const
         {
             return m_it == other.m_it;
         }
 
-        bool operator!=(const BaseIterator& other) const 
+        bool operator!=(const BaseIterator& other) const
         {
             return m_it != other.m_it;
         }
 
-        reference operator*() const 
+        reference operator*() const
         {
             return *m_it;
         }
 
-        pointer operator->() const 
+        pointer operator->() const
         {
             return &(*m_it);
         }
@@ -57,11 +59,10 @@ class LinkedHashMap
 
 public:
     LinkedHashMap() = default;
-    
-    LinkedHashMap(const LinkedHashMap& other) 
+
+    LinkedHashMap(const LinkedHashMap& other)
     {
-        for (const auto& pair : other.m_list) 
-        {
+        for (const auto& pair : other.m_list) {
             auto list_it = m_list.emplace_back(pair);
             m_map[pair.first] = --m_list.end();
         }
@@ -73,15 +74,13 @@ public:
         m_map = std::move(other.m_map);
     }
 
-    LinkedHashMap& operator=(const LinkedHashMap& other) 
+    LinkedHashMap& operator=(const LinkedHashMap& other)
     {
-        if (this != &other) 
-        {
+        if (this != &other) {
             m_list.clear();
             m_map.clear();
 
-            for (const auto& pair : other.m_list) 
-            {
+            for (const auto& pair : other.m_list) {
                 auto list_it = m_list.emplace_back(pair);
                 m_map[pair.first] = --m_list.end();
             }
@@ -89,10 +88,9 @@ public:
         return *this;
     }
 
-    LinkedHashMap& operator=(LinkedHashMap&& other) 
+    LinkedHashMap& operator=(LinkedHashMap&& other)
     {
-        if (this != &other)
-        {
+        if (this != &other) {
             m_list = std::move(other.m_list);
             m_map = std::move(other.m_map);
         }
@@ -118,15 +116,14 @@ public:
     V& operator[](const K& key)
     {
         auto it = m_map.find(key);
-        if (it == m_map.end()) 
-        {
+        if (it == m_map.end()) {
             m_list.emplace_back(key, V{});
             it = m_map.emplace(key, --m_list.end()).first;
         }
         return it->second->second;
     }
 
-    std::pair<iterator, bool> insert(const value_type& value) 
+    std::pair<iterator, bool> insert(const value_type& value)
     {
         auto it = m_map.find(value.first);
         if (it != m_map.end())
@@ -139,8 +136,7 @@ public:
     void erase(iterator it)
     {
         auto map_it = m_map.find(it->first);
-        if (map_it != m_map.end())
-        {
+        if (map_it != m_map.end()) {
             m_list.erase(map_it->second);
             m_map.erase(map_it);
         }

@@ -1,15 +1,15 @@
 #pragma once
 
-#include "Exception.h"
-#include "Config.h"
-
 #include <openfix/LinkedHashMap.h>
 
-#include <vector>
-#include <sstream>
-#include <unordered_map>
 #include <map>
 #include <memory>
+#include <sstream>
+#include <unordered_map>
+#include <vector>
+
+#include "Config.h"
+#include "Exception.h"
 
 inline constexpr char INTERNAL_SOH_CHAR = '\01';
 inline constexpr char EXTERNAL_SOH_CHAR = '|';
@@ -47,22 +47,24 @@ inline constexpr char TAG_ASSIGNMENT_CHAR = '=';
     F(UTCDATEONLY),         \
     F(LOCALMKTDATE),        \
                             \
-    F(DATA)            
+    F(DATA)
 
 #define F(x) x
-enum class FieldType { F(FIELD_TYPES) };
+enum class FieldType {
+    F(FIELD_TYPES)
+};
 #undef F
 struct FieldTypes
 {
-    #define F(x) {#x, FieldType::x}
-    inline static std::unordered_map<std::string, FieldType> LOOKUP { FIELD_TYPES };
-    #undef F
+#define F(x) {#x, FieldType::x}
+    inline static std::unordered_map<std::string, FieldType> LOOKUP{FIELD_TYPES};
+#undef F
 };
 
 struct GroupSpec
 {
     using FieldSet = std::unordered_map<int, bool>;
-    
+
     bool empty() const
     {
         return m_fields.empty() && m_groups.empty();
@@ -86,7 +88,7 @@ public:
         auto git = m_groups.find(tag);
         if (git != m_groups.end())
             return std::to_string(git->second.size());
-        
+
         throw FieldNotFound(tag);
     }
 
@@ -121,26 +123,35 @@ public:
         return it->second.size();
     }
 
-    #define GET_GROUPS                \
+#define GET_GROUPS                \
         auto it = m_groups.find(tag); \
         if (it == m_groups.end())     \
             throw FieldNotFound(tag); \
-        return it->second;            
+        return it->second;
 
-    std::vector<FieldMap>& getGroups(int tag) { GET_GROUPS }
-    const std::vector<FieldMap>& getGroups(int tag) const { GET_GROUPS }
-    #undef GET_GROUPS
+    std::vector<FieldMap>& getGroups(int tag)
+    {
+        GET_GROUPS
+    }
+    const std::vector<FieldMap>& getGroups(int tag) const
+    {
+        GET_GROUPS
+    }
+#undef GET_GROUPS
 
-    #define GET_GROUP                                                                \
+#define GET_GROUP                                                                \
         auto& vec = getGroups(tag);                                                  \
         if (idx >= vec.size())                                                       \
             throw std::out_of_range("Tried to access group " + std::to_string(tag)   \
                 + " with out-of-bounds index " + std::to_string(idx));               \
         return vec[idx];
 
-    FieldMap& getGroup(int tag, size_t idx) { GET_GROUP }
-    const FieldMap& getGroup(int tag, size_t idx) const { GET_GROUP }
-    #undef GET_GROUP
+    FieldMap& getGroup(int tag, size_t idx)
+    {
+        GET_GROUP
+    }
+    const FieldMap& getGroup(int tag, size_t idx) const {GET_GROUP}
+#undef GET_GROUP
 
     FieldMap& addGroup(int tag)
     {
@@ -148,7 +159,7 @@ public:
         if (it == m_groups.end())
             it = m_groups.insert({tag, {}}).first;
         it->second.push_back({});
-        return it->second[it->second.size()-1];
+        return it->second[it->second.size() - 1];
     }
 
     bool removeGroups(int tag)

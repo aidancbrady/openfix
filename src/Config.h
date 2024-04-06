@@ -1,27 +1,25 @@
 #pragma once
 
 #include <openfix/Log.h>
+#include <strings.h>
 
 #include <string>
-#include <vector>
-#include <unordered_map>
 #include <typeindex>
 #include <typeinfo>
-
-#include <strings.h>
+#include <unordered_map>
+#include <vector>
 
 #include "Exception.h"
 
 using SessionID_T = std::string;
 
-enum class SessionType
-{
+enum class SessionType {
     UNKNOWN,
     ACCEPTOR,
     INITIATOR,
 };
 
-template<typename Class, typename Type>
+template <typename Class, typename Type>
 struct BaseConfigItem
 {
     std::string name;
@@ -29,18 +27,18 @@ struct BaseConfigItem
     size_t index;
 };
 
-template<typename Class>
+template <typename Class>
 class Config
 {
 public:
-    Config() 
+    Config()
         : m_stringValues(defaults().m_strings)
         , m_longValues(defaults().m_longs)
         , m_boolValues(defaults().m_bools)
         , m_doubleValues(defaults().m_doubles)
     {}
 
-    template<typename Type>
+    template <typename Type>
     using ConfigItem = BaseConfigItem<Class, Type>;
 
     void setString(const ConfigItem<std::string>& item, std::string value)
@@ -85,11 +83,9 @@ public:
 
     void load(const std::unordered_map<std::string, std::string>& settings)
     {
-        for (const auto& [key, val] : settings)
-        {
+        for (const auto& [key, val] : settings) {
             auto it = defaults().m_fields.find(key);
-            if (it == defaults().m_fields.end())
-            {
+            if (it == defaults().m_fields.end()) {
                 LOG_WARN("Unknown configuration field: " << key);
                 continue;
             }
@@ -159,7 +155,7 @@ protected:
     CREATE_LOGGER("Config");
 };
 
-template<typename Class>
+template <typename Class>
 class StaticConfig : public Config<Class>
 {
 public:
@@ -213,7 +209,8 @@ struct PlatformSettings : StaticConfig<PlatformSettings>
 
 struct SessionSettings : Config<SessionSettings>
 {
-    SessionSettings() {}
+    SessionSettings()
+    {}
 
     static inline ConfigItem<std::string> BEGIN_STRING = createString("BeginString");
 

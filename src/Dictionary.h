@@ -1,14 +1,14 @@
 #pragma once
 
-#include "Message.h"
-#include "Config.h"
-
 #include <openfix/Log.h>
 
-#include <string>
 #include <memory>
-#include <unordered_set>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
+
+#include "Config.h"
+#include "Message.h"
 
 class Dictionary
 {

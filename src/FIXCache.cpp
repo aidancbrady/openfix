@@ -6,9 +6,7 @@ MemoryCache::MemoryCache(const SessionSettings& settings, std::shared_ptr<Dictio
     , m_senderSeqNum(1)
     , m_targetSeqNum(1)
     , m_store(store->createStore(settings))
-{
-
-}
+{}
 
 void MemoryCache::load()
 {
@@ -19,8 +17,7 @@ void MemoryCache::load()
     m_senderSeqNum = data.m_senderSeqNum;
     m_targetSeqNum = data.m_targetSeqNum;
 
-    for (const auto& [idx, msg] : data.m_messages)
-    {
+    for (const auto& [idx, msg] : data.m_messages) {
         m_messages.emplace(idx, m_dictionary->parse(m_settings, msg));
     }
 }
@@ -77,8 +74,7 @@ void MemoryCache::cache(int seqnum, const Message& msg)
 void MemoryCache::getMessages(int begin, int end, MessageConsumer consumer)
 {
     auto it = m_messages.lower_bound(begin);
-    for (; it != m_messages.end() && (end == 0 || it->first <= end); ++it)
-    {
+    for (; it != m_messages.end() && (end == 0 || it->first <= end); ++it) {
         consumer(it->first, it->second);
     }
 }

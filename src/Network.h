@@ -1,20 +1,19 @@
 #pragma once
 
+#include <oneapi/tbb/concurrent_queue.h>
 #include <openfix/Log.h>
 
-#include "Config.h"
-
-#include <string>
 #include <atomic>
-#include <memory>
-#include <thread>
-#include <vector>
-#include <mutex>
-#include <list>
 #include <condition_variable>
+#include <list>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
-#include <oneapi/tbb/concurrent_queue.h>
+#include "Config.h"
 
 #define READ_BUF_SIZE 1024
 #define WRITE_BUF_SIZE 1024
@@ -32,7 +31,7 @@ struct MsgPacket
 class ConnectionHandle
 {
 public:
-    ConnectionHandle(Network& network, ReaderThread& readerThread, int fd) 
+    ConnectionHandle(Network& network, ReaderThread& readerThread, int fd)
         : m_fd(fd)
         , m_network(network)
         , m_readerThread(readerThread)
@@ -58,10 +57,11 @@ class NetworkHandler : public std::enable_shared_from_this<NetworkHandler>
 public:
     using MessageCallback_T = std::function<void(const std::string&)>;
 
-    NetworkHandler(const SessionSettings& settings, Network& network, MessageCallback_T callback) 
+    NetworkHandler(const SessionSettings& settings, Network& network, MessageCallback_T callback)
         : m_settings(settings)
         , m_network(network)
-        , m_callback(std::move(callback)) {}
+        , m_callback(std::move(callback))
+    {}
 
     virtual ~NetworkHandler() = default;
 
@@ -116,13 +116,13 @@ private:
 class ReaderThread
 {
 public:
-    ReaderThread(Network& network) 
+    ReaderThread(Network& network)
         : m_running(true)
-        , m_network(network) 
+        , m_network(network)
     {
-        m_thread = std::thread([&]{ process(); });
+        m_thread = std::thread([&] { process(); });
     }
-    
+
     void process();
     void process(int fd);
 
@@ -195,11 +195,11 @@ struct WriteBuffer
 class WriterThread
 {
 public:
-    WriterThread(Network& network) 
+    WriterThread(Network& network)
         : m_running(true)
-        , m_network(network) 
+        , m_network(network)
     {
-        m_thread = std::thread([&]{ process(); });
+        m_thread = std::thread([&] { process(); });
     }
 
     void notify();
@@ -220,7 +220,7 @@ private:
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::thread m_thread;
-    
+
     std::unordered_map<int, WriteBuffer> m_bufferMap;
 
     Network& m_network;

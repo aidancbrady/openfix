@@ -60,7 +60,6 @@ void FileWriter::process()
                 if (!instance.m_queue.empty())
                     instance.m_queue.swap(instance.m_buffer);
             }
-
             if (instance.m_buffer.empty())
                 continue;
    
@@ -68,7 +67,7 @@ void FileWriter::process()
             if (!instance.m_stream.is_open())
                 instance.m_stream.open(instance.m_path, std::ofstream::out | std::ofstream::app);
             instance.m_stream << instance.m_buffer;
-
+    
             // clear the buffer
             instance.m_buffer.clear();
         }

@@ -80,6 +80,7 @@ private:
     int populateMessage(Message& msg);
 
     void internal_update();
+    void internal_send(const Message& msg, SendCallback_T callback);
 
 private:
     void onMessage(const std::string& msg);

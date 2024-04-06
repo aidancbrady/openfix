@@ -1,12 +1,11 @@
 #include "Session.h"
 
-#include "Exception.h"
-#include "Messages.h"
-#include "Fields.h"
-
 #include <openfix/Utils.h>
-
 #include <strings.h>
+
+#include "Exception.h"
+#include "Fields.h"
+#include "Messages.h"
 
 Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store)
     : m_settings(settings)
@@ -19,7 +18,7 @@ Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFI
     m_heartbeatInterval = settings.getLong(SessionSettings::HEARTBEAT_INTERVAL) * 1000;
     m_logonInterval = settings.getLong(SessionSettings::LOGON_INTERVAL) * 1000;
     m_reconnectInterval = settings.getLong(SessionSettings::RECONNECT_INTERVAL) * 1000;
-    
+
     m_network = std::make_shared<NetworkHandler>(m_settings, network, std::bind(&Session::onMessage, this, std::placeholders::_1));
 }
 
@@ -40,9 +39,8 @@ void Session::stop()
 
 void Session::onMessage(const std::string& text)
 {
-    dispatcher.dispatch([this, text]{
-        if (m_state == SessionState::KILLING)
-        {
+    dispatcher.dispatch([this, text] {
+        if (m_state == SessionState::KILLING) {
             LOG_WARN("Received message while killing session, ignoring");
             return;
         }
@@ -50,6 +48,7 @@ void Session::onMessage(const std::string& text)
         try {
             // parse message
             auto msg = m_dictionary->parse(m_settings, text);
+            m_logger.logMessage(msg.toString(), Direction::INBOUND);
 
             LOG_DEBUG("Received: " << msg);
 
@@ -60,8 +59,7 @@ void Session::onMessage(const std::string& text)
 
             // handle inbound queue
             auto& queue = m_cache->getInboundQueue();
-            while (!queue.empty() && getTargetSeqNum() == queue.begin()->first)
-            {
+            while (!queue.empty() && getTargetSeqNum() == queue.begin()->first) {
                 processMessage(queue.begin()->second, time);
                 queue.erase(queue.begin());
             }
@@ -77,32 +75,25 @@ void Session::processMessage(const Message& msg, long time)
 {
     auto msgType = msg.getHeader().getField(FIELD::MsgType);
 
-    if (!validateMessage(msg, time))
-    {
+    if (!validateMessage(msg, time)) {
         return;
     }
 
     // handle logons and non-gapfill sequence resets before checking seqnum
-    if (msgType == MESSAGE::SEQUENCE_RESET)
-    {
+    if (msgType == MESSAGE::SEQUENCE_RESET) {
         handleSequenceReset(msg);
         return;
-    }
-    else if (msgType == MESSAGE::LOGON)
-    {
+    } else if (msgType == MESSAGE::LOGON) {
         handleLogon(msg);
         return;
     }
 
-    if (!validateSeqNum(msg))
-    {
+    if (!validateSeqNum(msg)) {
         return;
     }
 
-    if (msgType == MESSAGE::LOGOUT)
-    {
-        if (m_state == SessionState::LOGOUT)
-        {
+    if (msgType == MESSAGE::LOGOUT) {
+        if (m_state == SessionState::LOGOUT) {
             LOG_INFO("Successful logout");
             m_state = SessionState::LOGOUT;
             m_network->disconnect();
@@ -110,32 +101,21 @@ void Session::processMessage(const Message& msg, long time)
         }
 
         sendLogout("Successful logout", true);
-    }
-    else if (msgType == MESSAGE::HEARTBEAT)
-    {
-        if (m_state == SessionState::TEST_REQUEST)
-        {
-            if (msg.getBody().has(FIELD::TestReqID))
-            {
-                if (msg.getBody().getField(FIELD::TestReqID) == std::to_string(m_testReqID))
-                {
+    } else if (msgType == MESSAGE::HEARTBEAT) {
+        if (m_state == SessionState::TEST_REQUEST) {
+            if (msg.getBody().has(FIELD::TestReqID)) {
+                if (msg.getBody().getField(FIELD::TestReqID) == std::to_string(m_testReqID)) {
                     m_state = SessionState::READY;
                 }
             }
         }
-    }
-    else if (msgType == MESSAGE::TEST_REQUEST)
-    {
+    } else if (msgType == MESSAGE::TEST_REQUEST) {
         auto test_id = msg.getBody().getField(FIELD::TestReqID);
         LOG_DEBUG("Responding to test request ID=" << test_id << " with heartbeat");
         sendHeartbeat(time, test_id);
-    }
-    else if (msgType == MESSAGE::RESEND_REQUEST)
-    {
+    } else if (msgType == MESSAGE::RESEND_REQUEST) {
         handleResendRequest(msg);
-    }
-    else if (msgType == MESSAGE::REJECT)
-    {
+    } else if (msgType == MESSAGE::REJECT) {
         LOG_INFO("Received reject message: " << msg);
     }
 }
@@ -145,16 +125,25 @@ void Session::send(Message& msg, SendCallback_T callback)
     int seqnum = populateMessage(msg);
     m_cache->cache(seqnum, msg);
     m_cache->nextSenderSeqNum();
-    m_network->send({msg.toString(true), callback});
-    LOG_DEBUG("Sending: " << msg);
+    internal_send(msg, callback);
 
     // update our heartbeat monitor as we just sent data
     m_lastSentHeartbeat = Utils::getEpochMillis();
 }
 
+void Session::internal_send(const Message& msg, SendCallback_T callback)
+{
+    if (m_network->isConnected()) {
+        auto msg_str = msg.toString();
+        LOG_DEBUG("Sending: " << msg_str);
+        m_logger.logMessage(msg_str, Direction::OUTBOUND);
+        m_network->send({msg.toString(true)});
+    }
+}
+
 void Session::runUpdate()
 {
-    dispatcher.dispatch([this]{
+    dispatcher.dispatch([this] {
         try {
             internal_update();
         } catch (...) {
@@ -167,11 +156,9 @@ void Session::internal_update()
 {
     long time = Utils::getEpochMillis();
 
-    if (!m_network->isConnected())
-    {
+    if (!m_network->isConnected()) {
         m_state = SessionState::LOGON;
-        if ((time - m_lastReconnect) >= m_reconnectInterval)
-        {
+        if ((time - m_lastReconnect) >= m_reconnectInterval) {
             LOG_DEBUG("Reconnect interval exceeded (" << (time - m_lastReconnect) << " >= " << m_reconnectInterval << "), attempting reconnect");
             m_network->start();
             m_lastReconnect = time;
@@ -180,40 +167,32 @@ void Session::internal_update()
         return;
     }
 
-    if (m_settings.getSessionType() == SessionType::INITIATOR && m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval)
-    {
+    if (m_settings.getSessionType() == SessionType::INITIATOR && m_state == SessionState::LOGON && (time - m_lastLogon) >= m_logonInterval) {
         LOG_DEBUG("Logon interval exceeded (" << (time - m_lastLogon) << " >= " << m_logonInterval << "), attempting logon");
         sendLogon();
         return;
     }
 
-    if (m_state == SessionState::TEST_REQUEST)
-    {
-        if ((time - m_lastRecvHeartbeat) >= m_heartbeatInterval)
-        {
+    if (m_state == SessionState::TEST_REQUEST) {
+        if ((time - m_lastRecvHeartbeat) >= m_heartbeatInterval) {
             terminate("Failed to respond to test request " + std::to_string(m_testReqID) + " within heartbeat interval");
         }
     }
 
-    if (m_state == SessionState::LOGOUT)
-    {
-        if ((time - m_logoutTime) >= 2 * m_heartbeatInterval)
-        {
+    if (m_state == SessionState::LOGOUT) {
+        if ((time - m_logoutTime) >= 2 * m_heartbeatInterval) {
             terminate("Didn't receive logout ack in time");
         }
     }
 
-    if (m_state != SessionState::LOGON && m_state != SessionState::LOGOUT)
-    {
-        if ((time - m_lastSentHeartbeat) >= m_heartbeatInterval)
-        {
+    if (m_state != SessionState::LOGON && m_state != SessionState::LOGOUT) {
+        if ((time - m_lastSentHeartbeat) >= m_heartbeatInterval) {
             LOG_DEBUG("Heartbeat threshold exceeded (" << (time - m_lastSentHeartbeat) << " >= " << m_heartbeatInterval << "), sending heartbeat");
             sendHeartbeat(time);
         }
 
         long heartbeatTimeout = static_cast<long>(m_settings.getDouble(SessionSettings::TEST_REQUEST_THRESHOLD) * m_heartbeatInterval);
-        if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout)
-        {
+        if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout) {
             LOG_WARN("Heartbeat timeout exceeded (" << (time - m_lastRecvHeartbeat) << " >= " << heartbeatTimeout << "), sending test request");
             sendTestRequest();
         }
@@ -223,28 +202,24 @@ void Session::internal_update()
 void Session::handleLogon(const Message& msg)
 {
     bool isTest = msg.getBody().tryGetBool(FIELD::TestMessageIndicator);
-    if (isTest != m_settings.getBool(SessionSettings::IS_TEST))
-    {
+    if (isTest != m_settings.getBool(SessionSettings::IS_TEST)) {
         logout("Sender/target test session mismatch", false);
         return;
     }
 
     bool isPosDup = msg.getBody().tryGetBool(FIELD::PosDupFlag);
-    if (isPosDup && !msg.getBody().has(FIELD::OrigSendingTime))
-    {
+    if (isPosDup && !msg.getBody().has(FIELD::OrigSendingTime)) {
         sendReject(msg, SessionRejectReason::RequiredTagMissing);
         return;
     }
 
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
-    if (!isPosDup && seqNum < m_cache->getTargetSeqNum())
-    {
+    if (!isPosDup && seqNum < m_cache->getTargetSeqNum()) {
         logout("MsgSeqNum too low, expected " + m_cache->getTargetSeqNum(), true);
         return;
     }
 
-    if (m_settings.getSessionType() == SessionType::ACCEPTOR)
-    {
+    if (m_settings.getSessionType() == SessionType::ACCEPTOR) {
         // set hbint, send a logon
         m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt)) * 1000;
         sendLogon();
@@ -252,8 +227,7 @@ void Session::handleLogon(const Message& msg)
 
     m_state = SessionState::READY;
 
-    if (seqNum > m_cache->getTargetSeqNum())
-    {
+    if (seqNum > m_cache->getTargetSeqNum()) {
         sendResendRequest(m_cache->getTargetSeqNum(), 0);
         return;
     }
@@ -272,7 +246,7 @@ void Session::handleResendRequest(const Message& msg)
     endSeqNo = std::min(endSeqNo, getSenderSeqNum());
 
     int ptr = beginSeqNo;
-    m_cache->getMessages(beginSeqNo, endSeqNo, [&](int seqno, Message msg){
+    m_cache->getMessages(beginSeqNo, endSeqNo, [&](int seqno, Message msg) {
         // skip session-level messages
         if (MESSAGE::SESSION_MSGS.count(msg.getHeader().getField(FIELD::MsgType)))
             return;
@@ -284,7 +258,7 @@ void Session::handleResendRequest(const Message& msg)
         msg.getHeader().setField(FIELD::PosDupFlag, "Y");
         msg.getHeader().setField(FIELD::OrigSendingTime, msg.getHeader().getField(FIELD::SendingTime));
         msg.getHeader().setField(FIELD::SendingTime, Utils::getUTCTimestamp());
-        
+
         m_network->send({msg.toString(), {}});
         ptr = seqno;
     });
@@ -300,16 +274,13 @@ void Session::handleSequenceReset(const Message& msg)
     int newSeqNum = std::stoi(msg.getBody().getField(FIELD::NewSeqNo));
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
 
-    if (newSeqNum <= seqNum)
-    {
+    if (newSeqNum <= seqNum) {
         sendReject(msg, SessionRejectReason::IncorrectValueForTag, "Attempt to lower sequence number, invalid value NewSeqNo(36)=" + std::to_string(newSeqNum));
         return;
     }
 
-    if (newSeqNum < m_cache->getTargetSeqNum())
-    {
-        logout("Unable to set SeqNum to " + std::to_string(newSeqNum) + ", next expected is " 
-            + std::to_string(m_cache->getTargetSeqNum()), true);
+    if (newSeqNum < m_cache->getTargetSeqNum()) {
+        logout("Unable to set SeqNum to " + std::to_string(newSeqNum) + ", next expected is " + std::to_string(m_cache->getTargetSeqNum()), true);
         return;
     }
 
@@ -338,9 +309,9 @@ void Session::sendLogout(const std::string& reason, bool terminate)
     msg.getHeader().setField(FIELD::MsgType, MESSAGE::LOGOUT);
     if (!reason.empty())
         msg.getBody().setField(FIELD::Text, reason);
-    
+
     if (terminate)
-        send(msg, [this, reason]{ this->terminate(reason); });
+        send(msg, [this, reason] { this->terminate(reason); });
     else
         send(msg);
 }
@@ -370,7 +341,7 @@ void Session::logout(const std::string& reason, bool terminate)
         m_state = SessionState::KILLING;
     else
         m_state = SessionState::LOGOUT;
-    
+
     sendLogout(reason, terminate);
 }
 
@@ -436,7 +407,7 @@ int Session::populateMessage(Message& msg)
 
 bool Session::validateMessage(const Message& msg, long time)
 {
-    auto fail = [&](const std::string& reason){
+    auto fail = [&](const std::string& reason) {
         if (m_state == SessionState::LOGON)
             terminate(reason);
         else
@@ -444,25 +415,19 @@ bool Session::validateMessage(const Message& msg, long time)
     };
 
     // ensure MsgSeqNum is stamped
-    if (!msg.getHeader().has(FIELD::MsgSeqNum))
-    {
+    if (!msg.getHeader().has(FIELD::MsgSeqNum)) {
         logout("Message missing MsgSeqNum(34)", true);
         return false;
     }
 
     // validate BeginString, SenderCompID, TargetCompID
-    if (msg.getHeader().getField(FIELD::BeginString) != m_settings.getString(SessionSettings::BEGIN_STRING))
-    {
+    if (msg.getHeader().getField(FIELD::BeginString) != m_settings.getString(SessionSettings::BEGIN_STRING)) {
         fail("Failed to validate BeginString(8): " + msg.getHeader().getField(FIELD::BeginString));
         return false;
-    }
-    else if (msg.getHeader().getField(FIELD::SenderCompID) != m_settings.getString(SessionSettings::TARGET_COMP_ID))
-    {
+    } else if (msg.getHeader().getField(FIELD::SenderCompID) != m_settings.getString(SessionSettings::TARGET_COMP_ID)) {
         fail("Failed to validate SenderCompID(49): " + msg.getHeader().getField(FIELD::SenderCompID));
         return false;
-    }
-    else if (msg.getHeader().getField(FIELD::TargetCompID) != m_settings.getString(SessionSettings::SENDER_COMP_ID))
-    {
+    } else if (msg.getHeader().getField(FIELD::TargetCompID) != m_settings.getString(SessionSettings::SENDER_COMP_ID)) {
         fail("Failed to validate TargetCompID(56): " + msg.getHeader().getField(FIELD::TargetCompID));
         return false;
     }
@@ -470,8 +435,7 @@ bool Session::validateMessage(const Message& msg, long time)
     // validate SendingTime
     auto sendingTime = Utils::parseUTCTimestamp(msg.getHeader().getField(FIELD::SendingTime));
     auto diff = time - sendingTime;
-    if (std::abs(diff) > (m_settings.getLong(SessionSettings::SENDING_TIME_THRESHOLD) * 1000))
-    {
+    if (std::abs(diff) > (m_settings.getLong(SessionSettings::SENDING_TIME_THRESHOLD) * 1000)) {
         LOG_ERROR("Sending time error on incoming message, current time=" << time << ", diff=" << diff);
         sendReject(msg, SessionRejectReason::SendingTimeProblem);
         logout("SendingTime(52) outside of threshold", false);
@@ -479,14 +443,12 @@ bool Session::validateMessage(const Message& msg, long time)
     }
 
     std::string msgType = msg.getHeader().getField(FIELD::MsgType);
-    if (m_state == SessionState::LOGON && msgType != MESSAGE::LOGON)
-    {
+    if (m_state == SessionState::LOGON && msgType != MESSAGE::LOGON) {
         logout("Received unexpected MsgType(35) during logon state: " + msgType, true);
         return false;
     }
 
-    if (m_state == SessionState::LOGOUT && msgType != MESSAGE::LOGOUT && msgType != MESSAGE::RESEND_REQUEST)
-    {
+    if (m_state == SessionState::LOGOUT && msgType != MESSAGE::LOGOUT && msgType != MESSAGE::RESEND_REQUEST) {
         logout("Received unexpected MsgType(35) during logoff state: " + msgType, true);
         return false;
     }
@@ -497,18 +459,14 @@ bool Session::validateMessage(const Message& msg, long time)
 bool Session::validateSeqNum(const Message& msg)
 {
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
-    if (seqNum == getTargetSeqNum())
-    {
+    if (seqNum == getTargetSeqNum()) {
         m_cache->nextTargetSeqNum();
         return true;
     }
 
-    if (seqNum < getTargetSeqNum())
-    {
+    if (seqNum < getTargetSeqNum()) {
         logout("MsgSeqNum too low, expected " + m_cache->getTargetSeqNum(), true);
-    }
-    else if (seqNum)
-    {
+    } else if (seqNum) {
         // queue this message and send resend request for gap
         m_cache->getInboundQueue()[seqNum] = msg;
         sendResendRequest(getTargetSeqNum(), seqNum);

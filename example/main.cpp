@@ -1,8 +1,8 @@
 #include <openfix/Application.h>
 #include <openfix/SignalHandler.h>
 
-#include <memory>
 #include <iostream>
+#include <memory>
 #include <thread>
 
 // https://stackoverflow.com/questions/31357215/is-it-ok-to-share-the-same-epoll-file-descriptor-among-threads
@@ -10,15 +10,14 @@
 int main(int argc, char** argv)
 {
     Logger::initialize();
-    
+
     if (argc != 2)
         throw std::runtime_error("usage: app <acceptor | initiator>");
-    
+
     Application app;
     SessionSettings settings;
 
-    if (strcasecmp("acceptor", argv[1]) == 0)
-    {
+    if (strcasecmp("acceptor", argv[1]) == 0) {
         std::cout << "starting acceptor" << std::endl;
         settings.setString(SessionSettings::SESSION_TYPE_STR, "acceptor");
         settings.setString(SessionSettings::BEGIN_STRING, "FIX.4.2");
@@ -28,9 +27,7 @@ int main(int argc, char** argv)
         settings.setLong(SessionSettings::ACCEPT_PORT, 12121);
 
         app.createSession("TEST_ACCEPTOR", settings);
-    }
-    else if (strcasecmp("initiator", argv[1]) == 0)
-    {
+    } else if (strcasecmp("initiator", argv[1]) == 0) {
         std::cout << "starting initiator" << std::endl;
         settings.setString(SessionSettings::SESSION_TYPE_STR, "initiator");
         settings.setString(SessionSettings::BEGIN_STRING, "FIX.4.2");
@@ -41,11 +38,10 @@ int main(int argc, char** argv)
         settings.setString(SessionSettings::CONNECT_HOST, "localhost");
 
         app.createSession("TEST_INITIATOR", settings);
-    }
-    else {
+    } else {
         throw std::runtime_error("unknown type: " + std::string(argv[1]));
     }
- 
+
     app.start();
 
     SignalHandler::static_wait();

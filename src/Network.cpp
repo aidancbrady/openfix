@@ -1,25 +1,22 @@
 #include "Network.h"
 
-#include "Message.h"
-#include "Fields.h"
-#include "Exception.h"
-
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netdb.h>
 #include <openfix/Utils.h>
+#include <poll.h>
+#include <string.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <cerrno>
 #include <iostream>
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/epoll.h>
-
-#include <arpa/inet.h>
-
-#include <unistd.h>
-#include <netdb.h>
-#include <poll.h>
-#include <fcntl.h>
-#include <string.h>
+#include "Exception.h"
+#include "Fields.h"
+#include "Message.h"
 
 #define EVENT_BUF_SIZE 256
 #define ACCEPTOR_BACKLOG 16
@@ -40,14 +37,12 @@ Network::Network() : m_epollFD(-1), m_running(false)
 bool try_make_non_blocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1) 
-    {
+    if (flags == -1) {
         LOG_ERROR("NetUtils", "Error getting flags from socket: " << strerror(errno));
         return false;
     }
 
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) 
-    {
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
         LOG_ERROR("NetUtils", "Error setting non-blocking flag on socket: " << strerror(errno));
         return false;
     }
@@ -73,8 +68,7 @@ void Network::start()
     LOG_INFO("Starting...");
 
     m_epollFD = epoll_create1(0);
-    if (m_epollFD == -1)
-    {
+    if (m_epollFD == -1) {
         throw std::runtime_error("Couldn't initialize epoll: " + std::string(strerror(errno)));
     }
 
@@ -83,10 +77,10 @@ void Network::start()
 
     for (size_t i = 0; i < m_writerThreadCount; ++i)
         m_writerThreads.push_back(std::make_unique<WriterThread>(*this));
-    
+
     LOG_INFO("Started, now running.");
 
-    m_thread = std::thread([&]{ run(); });
+    m_thread = std::thread([&] { run(); });
 }
 
 void Network::stop()
@@ -114,7 +108,7 @@ void Network::stop()
     m_writerThreads.clear();
 
     m_thread.join();
-    
+
     // finally, close epoll FD
     close(m_epollFD);
 
@@ -133,16 +127,15 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
-    
+
     struct addrinfo* ret;
 
-    hints.ai_family = AF_UNSPEC; // allow ipv6
+    hints.ai_family = AF_UNSPEC;  // allow ipv6
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
     int err = ::getaddrinfo(hostname.c_str(), std::to_string(port).c_str(), &hints, &ret);
-    if (err != 0)
-    {
+    if (err != 0) {
         LOG_ERROR("Error in hostname resolution: " << gai_strerror(err));
         return false;
     }
@@ -150,44 +143,35 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
     long timeout = settings.getLong(SessionSettings::CONNECT_TIMEOUT);
     bool connected = false;
 
-    for (struct addrinfo* addr = ret; addr != nullptr; addr = addr->ai_next)
-    {
+    for (struct addrinfo* addr = ret; addr != nullptr; addr = addr->ai_next) {
         fd = ::socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
-        if (fd == -1)
-        {
+        if (fd == -1) {
             err = errno;
             continue;
         }
 
-        if (!try_make_non_blocking(fd))
-        {
+        if (!try_make_non_blocking(fd)) {
             close(fd);
             continue;
         }
 
         int res = ::connect(fd, addr->ai_addr, addr->ai_addrlen);
-        if (res < 0 && errno == EINPROGRESS)
-        {
+        if (res < 0 && errno == EINPROGRESS) {
             struct pollfd pfd;
             memset(&pfd, 0, sizeof(pfd));
             pfd.fd = fd;
             pfd.events = POLLOUT;
 
             res = poll(&pfd, 1, timeout);
-            if (res > 0)
-            {
+            if (res > 0) {
                 int so_error;
                 socklen_t len = sizeof(so_error);
                 getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len);
-                if (so_error == 0)
-                {
+                if (so_error == 0) {
                     char host[NI_MAXHOST], service[NI_MAXSERV];
-                    if (getnameinfo(addr->ai_addr, addr->ai_addrlen, host, sizeof(host), service, sizeof(service), NI_NUMERICHOST | NI_NUMERICSERV) == 0) 
-                    {
+                    if (getnameinfo(addr->ai_addr, addr->ai_addrlen, host, sizeof(host), service, sizeof(service), NI_NUMERICHOST | NI_NUMERICSERV) == 0) {
                         LOG_INFO("Successful connection to " << host << ":" << service << " on fd=" << fd);
-                    } 
-                    else 
-                    {
+                    } else {
                         LOG_WARN("Successful connection, but cannot resolve address to string...");
                     }
 
@@ -203,10 +187,8 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
 
     ::freeaddrinfo(ret);
 
-    if (connected)
-    {
-        if (!m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd))
-        {
+    if (connected) {
+        if (!m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd)) {
             close(fd);
             return false;
         }
@@ -215,8 +197,7 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
         event.events = EPOLLIN | EPOLLOUT | EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
         event.data.fd = fd;
 
-        if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
-        {
+        if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
             LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
             close(fd);
             return false;
@@ -245,7 +226,7 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
 {
     if (!m_running.load(std::memory_order_acquire))
         return false;
-        
+
     // acceptors should be created/destroyed atomically
     std::lock_guard lock(m_mutex);
 
@@ -253,16 +234,13 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
     int fd = m_acceptors[port];
 
     // see if we already have a live fd associated with this accept port
-    if (fd == 0)
-    {
-        if ((fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-        {
+    if (fd == 0) {
+        if ((fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
             LOG_ERROR("Unable to create socket: " << strerror(errno));
             return false;
         }
 
-        if (!set_sock_opt(fd, SO_REUSEADDR))
-        {
+        if (!set_sock_opt(fd, SO_REUSEADDR)) {
             ::close(fd);
             return false;
         }
@@ -270,30 +248,27 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
         LOG_DEBUG("Created server socket on port " << port << " with fd=" << fd);
 
         struct sockaddr_in addr;
-        addr.sin_family = AF_UNSPEC; // support ipv4
+        addr.sin_family = AF_UNSPEC;  // support ipv4
         addr.sin_port = ::htons(port);
         addr.sin_addr.s_addr = INADDR_ANY;
 
-        if (::bind(fd, (const struct sockaddr *) &addr, sizeof(addr)) < 0) 
-        {
+        if (::bind(fd, (const struct sockaddr*)&addr, sizeof(addr)) < 0) {
             LOG_ERROR("Couldn't bind to port: " << strerror(errno));
             ::close(fd);
             return false;
         }
 
-        if (::listen(fd, ACCEPTOR_BACKLOG) < 0) 
-        {
+        if (::listen(fd, ACCEPTOR_BACKLOG) < 0) {
             LOG_ERROR("Couldn't listen to accept port: " << strerror(errno));
             ::close(fd);
             return false;
         }
 
         struct epoll_event event;
-        event.events = EPOLLIN | EPOLLERR | EPOLLET; // server socket should only notify once (ET)
+        event.events = EPOLLIN | EPOLLERR | EPOLLET;  // server socket should only notify once (ET)
         event.data.fd = fd;
 
-        if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) 
-        {
+        if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
             LOG_ERROR("Couldn't add listen socket to epoll wait list: " << strerror(errno));
             ::close(fd);
             return false;
@@ -318,8 +293,7 @@ bool Network::removeAcceptor(const SessionSettings& settings)
     int port = settings.getLong(SessionSettings::ACCEPT_PORT);
     int fd = m_acceptors[port];
 
-    if (fd == 0)
-    {
+    if (fd == 0) {
         // socket doesn't exist
         return false;
     }
@@ -339,62 +313,49 @@ void Network::run()
     int numEvents;
     long timeout = PlatformSettings::getLong(PlatformSettings::EPOLL_TIMEOUT);
 
-    while (m_running)
-    {
-        while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) > 0)
-        {
-            if (numEvents < 0) 
-            {
-                if (errno == EINTR) 
-                {
+    while (m_running) {
+        while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) > 0) {
+            if (numEvents < 0) {
+                if (errno == EINTR) {
                     LOG_WARN("epoll_wait was interrupted by a signal.");
-                    continue; // retry, no biggie
+                    continue;  // retry, no biggie
                 }
 
                 LOG_ERROR("epoll_wait error: " << strerror(errno));
                 break;
             }
 
-            if (numEvents == 0) 
-            {
+            if (numEvents == 0) {
                 LOG_TRACE("epoll_wait timeout");
                 continue;
             }
 
-            for (int i = 0; i < numEvents; i++) 
-            {
+            for (int i = 0; i < numEvents; i++) {
                 int fd = events[i].data.fd;
                 uint32_t event_mask = events[i].events;
 
-                if (event_mask & EPOLLERR) 
-                {
+                if (event_mask & EPOLLERR) {
                     int err = 0;
                     socklen_t len = sizeof(err);
-                    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0) 
-                    {
+                    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0) {
                         LOG_ERROR("EPOLLERR on fd=" << fd << ", error: " << strerror(err));
-                    } 
-                    else 
-                    {
+                    } else {
                         LOG_ERROR("EPOLLERR on fd=" << fd << ", and getsockopt failed to get error.");
                     }
                 }
-                if (event_mask & EPOLLIN)
-                {
+                if (event_mask & EPOLLIN) {
                     LOG_TRACE("data callback for fd=" << fd);
 
                     // data received
                     m_readerThreads[fd % m_readerThreadCount]->queue(fd);
                 }
-                if (event_mask & EPOLLOUT)
-                {
+                if (event_mask & EPOLLOUT) {
                     LOG_TRACE("write callback for fd=" << fd);
 
                     // ready to write
                     m_writerThreads[fd % m_writerThreadCount]->notify();
                 }
-                if (event_mask & (EPOLLRDHUP | EPOLLHUP))
-                {
+                if (event_mask & (EPOLLRDHUP | EPOLLHUP)) {
                     LOG_INFO("disconnect callback for fd=" << fd);
                     // connection hangup
                     m_readerThreads[fd % m_readerThreadCount]->disconnect(fd);
@@ -410,21 +371,18 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     struct sockaddr_in addr;
     socklen_t addrlen = sizeof(addr);
     int fd = ::accept(server_fd, reinterpret_cast<struct sockaddr*>(&addr), &addrlen);
-    if (fd < 0)
-    {
+    if (fd < 0) {
         LOG_WARN("Failed to accept new socket: " << strerror(errno));
         return -1;
     }
 
-    if (!try_make_non_blocking(fd))
-    {
+    if (!try_make_non_blocking(fd)) {
         ::close(fd);
         return false;
     }
 
     char ip[INET_ADDRSTRLEN + 1];
-    if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) 
-    {
+    if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) {
         LOG_WARN("Failed to parse incoming connection IP address: " << ::strerror(errno));
         ::close(fd);
         return false;
@@ -436,8 +394,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     event.events = EPOLLIN | EPOLLOUT | EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
     event.data.fd = fd;
 
-    if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0)
-    {
+    if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
         LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
         ::close(fd);
         return false;
@@ -472,16 +429,14 @@ void ReaderThread::disconnect(int fd)
     ::close(fd);
     m_buffer.clear(fd);
     auto it = m_connections.find(fd);
-    if (m_connections.find(fd) != m_connections.end())
-    {
+    if (m_connections.find(fd) != m_connections.end()) {
         LOG_DEBUG("Disconnecting known connection, fd=" << fd);
         it->second->setConnection(nullptr);
         m_connections.erase(fd);
         return;
     }
-    
-    if (m_unknownConnections.find(fd) != m_unknownConnections.end())
-    {
+
+    if (m_unknownConnections.find(fd) != m_unknownConnections.end()) {
         LOG_DEBUG("Disconnecting unknown connection, fd=" << fd);
         m_unknownConnections.erase(fd);
         return;
@@ -490,10 +445,9 @@ void ReaderThread::disconnect(int fd)
 
 void ReaderThread::process()
 {
-    while (m_running.load(std::memory_order_acquire))
-    {
+    while (m_running.load(std::memory_order_acquire)) {
         std::unique_lock lock(m_mutex);
-        m_cv.wait(lock, [&](){ return !m_running.load() || !m_readyFDs.empty(); });
+        m_cv.wait(lock, [&]() { return !m_running.load() || !m_readyFDs.empty(); });
         lock.unlock();
 
         if (!m_running.load(std::memory_order_acquire))
@@ -520,8 +474,7 @@ void ReaderThread::process(int fd)
     // known connections
     {
         auto it = m_connections.find(fd);
-        if (it != m_connections.end())
-        {
+        if (it != m_connections.end()) {
             LOG_TRACE("Handling data for known connection on fd=" << fd);
 
             auto msgs = m_buffer.read(fd);
@@ -531,12 +484,11 @@ void ReaderThread::process(int fd)
             return;
         }
     }
-    
+
     // acceptor socket
     {
         auto it = m_acceptorSockets.find(fd);
-        if (it != m_acceptorSockets.end())
-        {
+        if (it != m_acceptorSockets.end()) {
             LOG_TRACE("Attempting to accept connection on accept socket fd=" << fd);
             m_network.accept(fd, it->second);
             return;
@@ -546,29 +498,25 @@ void ReaderThread::process(int fd)
     // unknown acceptor connections
     {
         auto it = m_unknownConnections.find(fd);
-        if (it != m_unknownConnections.end())
-        {
+        if (it != m_unknownConnections.end()) {
             LOG_TRACE("Handling data for unknown connection on fd=" << fd);
             auto acceptor = it->second;
 
             auto msgs = m_buffer.read(fd);
-            if (!msgs.empty())
-            {
+            if (!msgs.empty()) {
                 // this connection is either invalid or will be known
                 m_unknownConnections.erase(fd);
                 const auto& msg = msgs[0];
 
                 auto sender_comp = Utils::getTagValue(msg, SENDER_COMP_ID_TAG);
-                if (sender_comp.first.empty())
-                {
+                if (sender_comp.first.empty()) {
                     LOG_ERROR("Received message without SenderCompID");
                     ::close(fd);
                     return;
                 }
 
                 auto target_comp = Utils::getTagValue(msg, TARGET_COMP_ID_TAG, sender_comp.second);
-                if (target_comp.first.empty())
-                {
+                if (target_comp.first.empty()) {
                     LOG_ERROR("Received message without TargetCompID");
                     ::close(fd);
                     return;
@@ -577,16 +525,14 @@ void ReaderThread::process(int fd)
                 // flip as this is from their perspective
                 auto cpty = target_comp.first + ':' + sender_comp.first;
                 auto consumerIt = acceptor->m_sessions.find(cpty);
-                if (consumerIt == acceptor->m_sessions.end())
-                {
+                if (consumerIt == acceptor->m_sessions.end()) {
                     LOG_ERROR("Received connection from unknown counterparty: " << cpty);
                     ::close(fd);
                     return;
                 }
 
                 // make sure this session isn't already connected
-                if (consumerIt->second->isConnected())
-                {
+                if (consumerIt->second->isConnected()) {
                     LOG_ERROR("Received connection from already-connected session: " << cpty);
                     ::close(fd);
                     return;
@@ -699,14 +645,12 @@ std::vector<std::string> ReadBuffer::read(int fd)
     char read_buffer[READ_BUF_SIZE];
 
     int bytes = 0;
-    while ((bytes = ::recv(fd, read_buffer, sizeof(read_buffer), 0)) > 0)
-    {
+    while ((bytes = ::recv(fd, read_buffer, sizeof(read_buffer), 0)) > 0) {
         buffer.append(read_buffer, bytes);
 
         // parse all the messages we can
         size_t ptr = 0;
-        while (true)
-        {
+        while (true) {
             ptr = 0;
 
             // find beginning of message
@@ -714,13 +658,12 @@ std::vector<std::string> ReadBuffer::read(int fd)
             if (ptr == std::string::npos)
                 break;
 
-            if (ptr > 0)
-            {
+            if (ptr > 0) {
                 LOG_WARN("Discarding text received in buffer: " << buffer.substr(0, ptr));
                 buffer.erase(0, ptr);
                 ptr = 0;
             }
-            
+
             // find start of bodylength tag
             auto tag_it = Utils::getTagValue(buffer, BODY_LENGTH_TAG, ptr);
             if (tag_it.first.empty())
@@ -738,7 +681,7 @@ std::vector<std::string> ReadBuffer::read(int fd)
                 buffer.erase(0, ptr + 1);
                 continue;
             }
-                
+
             // find the checksum
             tag_it = Utils::getTagValue(buffer, CHECKSUM_TAG, ptr);
             if (tag_it.first.empty())
@@ -780,8 +723,7 @@ void WriterThread::notify()
 
 void WriterThread::process()
 {
-    while (m_running.load(std::memory_order_acquire))
-    {
+    while (m_running.load(std::memory_order_acquire)) {
         std::unique_lock lock(m_mutex);
         m_cv.wait(lock);
         lock.unlock();
@@ -789,8 +731,7 @@ void WriterThread::process()
         if (!m_running.load(std::memory_order_acquire))
             return;
 
-        for (auto& [fd, buffer] : m_bufferMap)
-        {
+        for (auto& [fd, buffer] : m_bufferMap) {
             {
                 std::lock_guard lock(m_mutex);
                 if (!buffer.m_queue.empty())
@@ -803,13 +744,10 @@ void WriterThread::process()
                 continue;
 
             size_t sent = 0;
-            while (sent < buffer.m_buffer.length())
-            {
+            while (sent < buffer.m_buffer.length()) {
                 ssize_t ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent, MSG_NOSIGNAL);
-                if (ret < 0) 
-                {
-                    if (errno != EAGAIN && errno != EWOULDBLOCK)
-                    {
+                if (ret < 0) {
+                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
                         LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
                         buffer.m_buffer.clear();
                         buffer.m_meta_buffer.clear();
@@ -820,12 +758,10 @@ void WriterThread::process()
                 sent += ret;
             }
 
-            if (!buffer.m_meta_buffer.empty())
-            {
+            if (!buffer.m_meta_buffer.empty()) {
                 size_t processed = 0;
 
-                while (!buffer.m_meta_buffer.empty() && processed + buffer.m_meta_buffer.front().m_msg_size <= sent) 
-                {
+                while (!buffer.m_meta_buffer.empty() && processed + buffer.m_meta_buffer.front().m_msg_size <= sent) {
                     processed += buffer.m_meta_buffer.front().m_msg_size;
                     if (buffer.m_meta_buffer.front().m_callback)
                         buffer.m_meta_buffer.front().m_callback();
@@ -833,14 +769,12 @@ void WriterThread::process()
                 }
 
                 // if sent bytes did not complete the next message and partial data remains
-                if (processed < sent && !buffer.m_meta_buffer.empty())
-                {
+                if (processed < sent && !buffer.m_meta_buffer.empty()) {
                     buffer.m_meta_buffer.front().m_msg_size -= (sent - processed);
                 }
             }
 
-            if (sent < buffer.m_buffer.length())
-            {
+            if (sent < buffer.m_buffer.length()) {
                 // Not all data was sent; store the unsent part back in m_queue for later.
                 std::lock_guard lock(m_mutex);
                 buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
@@ -858,7 +792,7 @@ void WriterThread::send(int fd, MsgPacket&& msg)
         m_bufferMap[fd].m_queue.append(msg.m_msg);
         m_bufferMap[fd].m_meta_queue.push_back(std::move(msg));
     }
-    
+
     m_cv.notify_one();
 }
 
@@ -901,8 +835,7 @@ void ConnectionHandle::send(MsgPacket&& msg)
 
 void NetworkHandler::start()
 {
-    if (m_settings.getSessionType() == SessionType::INITIATOR)
-    {
+    if (m_settings.getSessionType() == SessionType::INITIATOR) {
         LOG_INFO("Attempting to connect...");
         bool ret = m_network.connect(m_settings, shared_from_this());
         if (ret) {
@@ -910,11 +843,8 @@ void NetworkHandler::start()
         } else {
             LOG_DEBUG("Unable to connect, will retry after next interval.");
         }
-    }
-    else if (m_settings.getSessionType() == SessionType::ACCEPTOR)
-    {
-        if (!m_network.hasAcceptor(m_settings))
-        {
+    } else if (m_settings.getSessionType() == SessionType::ACCEPTOR) {
+        if (!m_network.hasAcceptor(m_settings)) {
             LOG_INFO("Attempting to create acceptor...");
             bool ret = m_network.addAcceptor(m_settings, shared_from_this());
             if (ret) {
@@ -932,8 +862,7 @@ void NetworkHandler::stop()
     disconnect();
 
     // shut down if we're an acceptor
-    if (m_settings.getSessionType() == SessionType::ACCEPTOR)
-    {
+    if (m_settings.getSessionType() == SessionType::ACCEPTOR) {
         m_network.removeAcceptor(m_settings);
     }
 }

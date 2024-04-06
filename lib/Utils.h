@@ -1,9 +1,9 @@
 #pragma once
 
-#include <ctime>
 #include <chrono>
-#include <sstream>
+#include <ctime>
 #include <iomanip>
+#include <sstream>
 
 struct Utils
 {
@@ -22,11 +22,11 @@ struct Utils
 
         std::time_t t = std::mktime(&tm);
         long timezoneOffset = 0;
-    #ifdef _MSC_VER
+#ifdef _MSC_VER
         _get_timezone(&timezoneOffset);
-    #else
+#else
         timezoneOffset = timezone;
-    #endif
+#endif
         t -= timezoneOffset;
 
         auto time_since_epoch = std::chrono::system_clock::from_time_t(t).time_since_epoch();

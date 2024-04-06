@@ -1,19 +1,18 @@
 #pragma once
 
-#include "FIXLogger.h"
-#include "FIXStore.h"
-#include "Session.h"
-#include "Network.h"
-#include "lib/Dispatcher.h"
-
+#include <atomic>
 #include <memory>
 #include <thread>
-#include <atomic>
 #include <unordered_map>
+
+#include "FIXLogger.h"
+#include "FIXStore.h"
+#include "Network.h"
+#include "Session.h"
+#include "lib/Dispatcher.h"
 
 struct ApplicationDelegate
 {
-
 };
 
 class Application

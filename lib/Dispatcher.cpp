@@ -1,8 +1,8 @@
 #include "Dispatcher.h"
 
-#include "Utils.h"
-
 #include <cstdlib>
+
+#include "Utils.h"
 
 ////////////////////////////////////////////
 //               Dispatcher               //
@@ -10,14 +10,12 @@
 
 Dispatcher::Dispatcher(size_t threads)
 {
-    for (size_t i = 0; i < threads; ++i)
-        m_workers.push_back(std::make_unique<Worker>());
+    for (size_t i = 0; i < threads; ++i) m_workers.push_back(std::make_unique<Worker>());
 }
 
 Dispatcher::~Dispatcher()
 {
-    for (auto& worker : m_workers)
-        worker->stop();
+    for (auto& worker : m_workers) worker->stop();
     for (auto& worker : m_workers)
         if (worker->m_thread.joinable())
             worker->m_thread.join();
@@ -25,13 +23,10 @@ Dispatcher::~Dispatcher()
 
 void Worker::run()
 {
-    while (!m_stop.load(std::memory_order_acquire))
-    {
+    while (!m_stop.load(std::memory_order_acquire)) {
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            m_cv.wait(lock, [&]() {
-                return m_stop.load() || !m_queue.empty();
-            });
+            m_cv.wait(lock, [&]() { return m_stop.load() || !m_queue.empty(); });
         }
 
         if (m_stop.load())
@@ -58,26 +53,17 @@ void Worker::stop()
     m_cv.notify_one();
 }
 
-void Dispatcher::dispatch(Callback callback)
-{
-    dispatch(std::move(callback), std::rand());
-}
+void Dispatcher::dispatch(Callback callback) { dispatch(std::move(callback), std::rand()); }
 
-void Dispatcher::dispatch(Callback callback, int hash)
-{
-    m_workers[hash % m_workers.size()]->dispatch(std::move(callback));
-}
+void Dispatcher::dispatch(Callback callback, int hash) { m_workers[hash % m_workers.size()]->dispatch(std::move(callback)); }
 
 ////////////////////////////////////////////
 //                 Timer                  //
 ////////////////////////////////////////////
 
-Timer::Timer()
-    : m_stop(false), m_timerCount(0)
+Timer::Timer() : m_stop(false), m_timerCount(0)
 {
-    m_thread = std::thread([&]() {
-        run();
-    });
+    m_thread = std::thread([&]() { run(); });
 }
 
 Timer::~Timer()
@@ -87,28 +73,23 @@ Timer::~Timer()
         m_stop.store(true, std::memory_order_release);
         m_cv.notify_one();
     }
-  
+
     m_thread.join();
 }
 
 void Timer::run()
 {
     uint64_t time, next;
-    while (!m_stop.load(std::memory_order_acquire))
-    {
+    while (!m_stop.load(std::memory_order_acquire)) {
         std::unique_lock<std::mutex> lock(m_mutex);
         time = Utils::getEpochMillis();
 
-        while (!m_events.empty()) 
-        {
+        while (!m_events.empty()) {
             auto it = m_events.begin();
-            if (time >= it->first)
-            {
-                for (auto id : it->second)
-                {
+            if (time >= it->first) {
+                for (auto id : it->second) {
                     auto timer_it = m_timers.find(id);
-                    if (timer_it != m_timers.end())
-                    {
+                    if (timer_it != m_timers.end()) {
                         const auto& timer = timer_it->second;
                         timer.m_callback();
 
@@ -127,7 +108,7 @@ void Timer::run()
         }
 
         if (next > time)
-            m_cv.wait_for(lock, std::chrono::milliseconds(next-time));
+            m_cv.wait_for(lock, std::chrono::milliseconds(next - time));
         else
             m_cv.wait(lock);
     }
