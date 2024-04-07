@@ -433,7 +433,7 @@ void ReaderThread::disconnect(int fd)
     auto it = m_connections.find(fd);
     if (m_connections.find(fd) != m_connections.end()) {
         LOG_DEBUG("Disconnecting known connection, fd=" << fd);
-        it->second->setConnection(nullptr);
+        it->second->invalidate();
         m_connections.erase(fd);
         return;
     }
@@ -462,8 +462,7 @@ void ReaderThread::process()
         try {
             process(fd);
         } catch (const SocketClosedError& e) {
-            LOG_ERROR("Socket is closed, disconnecting fd=" << fd);
-            disconnect(fd);
+            LOG_ERROR("Socket is closed, fd=" << fd);
         }
     }
 }
@@ -574,7 +573,7 @@ void ReaderThread::stop()
     for (const auto& [k, conn] : m_connections) {
         ::close(k);
         // proper cleanup - maybe improve this in the future
-        conn->setConnection(nullptr);
+        conn->invalidate();
     }
     // close unknown connections
     for (const auto& [k, _] : m_unknownConnections)
@@ -726,63 +725,79 @@ void WriterThread::notify()
 void WriterThread::process()
 {
     while (m_running.load(std::memory_order_acquire)) {
-        std::unique_lock lock(m_mutex);
-        m_cv.wait(lock);
-        lock.unlock();
+        {
+            std::unique_lock lock(m_bufferMutex);
+            m_cv.wait(lock);
+        }
 
+        std::vector<int> invalid_buffers;
         if (!m_running.load(std::memory_order_acquire))
             return;
 
-        for (auto& [fd, buffer] : m_bufferMap) {
-            {
-                std::lock_guard lock(m_mutex);
-                if (!buffer.m_queue.empty())
-                    buffer.m_queue.swap(buffer.m_buffer);
-                if (!buffer.m_meta_queue.empty())
-                    buffer.m_meta_queue.swap(buffer.m_meta_buffer);
-            }
+        {
+            std::shared_lock lock(m_bufferMutex);
+            for (auto& [fd, buffer] : m_bufferMap) {
+                {
+                    std::lock_guard lock(m_mutex);
+                    if (!buffer.m_valid.load(std::memory_order_acquire)) {
+                        invalid_buffers.push_back(fd);
+                        continue;
+                    }
 
-            if (buffer.m_buffer.empty())
-                continue;
+                    if (!buffer.m_queue.empty())
+                        buffer.m_queue.swap(buffer.m_buffer);
+                    if (!buffer.m_meta_queue.empty())
+                        buffer.m_meta_queue.swap(buffer.m_meta_buffer);
+                }
 
-            size_t sent = 0;
-            while (sent < buffer.m_buffer.length()) {
-                ssize_t ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent, MSG_NOSIGNAL);
-                if (ret < 0) {
-                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                        LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
-                        buffer.m_buffer.clear();
-                        buffer.m_meta_buffer.clear();
+                if (buffer.m_buffer.empty())
+                    continue;
+
+                size_t sent = 0;
+                while (sent < buffer.m_buffer.length()) {
+                    ssize_t ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent, MSG_NOSIGNAL);
+                    if (ret < 0) {
+                        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                            LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
+                            buffer.m_buffer.clear();
+                            buffer.m_meta_buffer.clear();
+                            break;
+                        }
                         break;
                     }
-                    break;
-                }
-                sent += ret;
-            }
-
-            if (!buffer.m_meta_buffer.empty()) {
-                size_t processed = 0;
-
-                while (!buffer.m_meta_buffer.empty() && processed + buffer.m_meta_buffer.front().m_msg_size <= sent) {
-                    processed += buffer.m_meta_buffer.front().m_msg_size;
-                    if (buffer.m_meta_buffer.front().m_callback)
-                        buffer.m_meta_buffer.front().m_callback();
-                    buffer.m_meta_buffer.erase(buffer.m_meta_buffer.begin());
+                    sent += ret;
                 }
 
-                // if sent bytes did not complete the next message and partial data remains
-                if (processed < sent && !buffer.m_meta_buffer.empty()) {
-                    buffer.m_meta_buffer.front().m_msg_size -= (sent - processed);
+                if (!buffer.m_meta_buffer.empty()) {
+                    size_t processed = 0;
+
+                    while (!buffer.m_meta_buffer.empty() && processed + buffer.m_meta_buffer.front().m_msg_size <= sent) {
+                        processed += buffer.m_meta_buffer.front().m_msg_size;
+                        if (buffer.m_meta_buffer.front().m_callback)
+                            buffer.m_meta_buffer.front().m_callback();
+                        buffer.m_meta_buffer.erase(buffer.m_meta_buffer.begin());
+                    }
+
+                    // if sent bytes did not complete the next message and partial data remains
+                    if (processed < sent && !buffer.m_meta_buffer.empty()) {
+                        buffer.m_meta_buffer.front().m_msg_size -= (sent - processed);
+                    }
                 }
-            }
 
-            if (sent < buffer.m_buffer.length()) {
-                // Not all data was sent; store the unsent part back in m_queue for later.
-                std::lock_guard lock(m_mutex);
-                buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
-            }
+                if (sent < buffer.m_buffer.length()) {
+                    // Not all data was sent; store the unsent part back in m_queue for later.
+                    std::lock_guard lock(m_mutex);
+                    buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
+                }
 
-            buffer.m_buffer.clear();
+                buffer.m_buffer.clear();
+            }
+        }
+
+        {
+            std::unique_lock lock(m_bufferMutex);
+            for (int invalid_fd : invalid_buffers)
+                m_bufferMap.erase(invalid_fd);
         }
     }
 }
@@ -790,6 +805,7 @@ void WriterThread::process()
 void WriterThread::send(int fd, MsgPacket&& msg)
 {
     {
+        // TODO this is very unsafe and needs to be fixed
         std::lock_guard lock(m_mutex);
         m_bufferMap[fd].m_queue.append(msg.m_msg);
         m_bufferMap[fd].m_meta_queue.push_back(std::move(msg));
@@ -800,9 +816,13 @@ void WriterThread::send(int fd, MsgPacket&& msg)
 
 void WriterThread::disconnect(int fd)
 {
-    std::lock_guard lock(m_mutex);
-    LOG_DEBUG("Disconnect received for fd=" << fd << ", clearing send buffer");
-    m_bufferMap.erase(fd);
+    {
+        std::lock_guard lock(m_mutex);
+        LOG_DEBUG("Disconnect received for fd=" << fd << ", clearing send buffer");
+        m_bufferMap[fd].m_valid.store(false, std::memory_order_release);
+    }
+
+    m_cv.notify_one();
 }
 
 void WriterThread::stop()
@@ -812,7 +832,9 @@ void WriterThread::stop()
         m_running.store(false, std::memory_order_release);
     }
 
-    m_bufferMap.clear();
+    for (const auto& [fd, buf] : m_bufferMap)
+        m_bufferMap[fd].m_valid = false;
+
     m_cv.notify_one();
 }
 
@@ -877,25 +899,46 @@ void NetworkHandler::processMessage(const std::string& msg)
 void NetworkHandler::send(MsgPacket&& msg)
 {
     std::lock_guard lock(m_mutex);
-    if (m_connection)
+    if (m_connection) {
+        if (!m_valid.load(std::memory_order_acquire)) {
+            m_connection = nullptr;
+            return;
+        }
         m_connection->send(std::move(msg));
+    }
 }
 
 void NetworkHandler::disconnect()
 {
     std::lock_guard lock(m_mutex);
-    if (m_connection)
+    if (m_connection) {
+        if (!m_valid.load(std::memory_order_acquire)) {
+            m_connection = nullptr;
+            return;
+        }
         m_connection->disconnect();
+        m_connection = nullptr;
+    }
 }
 
 void NetworkHandler::setConnection(std::shared_ptr<ConnectionHandle> connection)
 {
     std::lock_guard lock(m_mutex);
     m_connection = connection;
+    m_valid.store(true, std::memory_order_release);
+}
+
+void NetworkHandler::invalidate()
+{
+    m_valid.store(false, std::memory_order_release);
 }
 
 bool NetworkHandler::isConnected()
 {
     std::lock_guard lock(m_mutex);
+    if (!m_valid.load(std::memory_order_acquire)) {
+        m_connection = nullptr;
+        return false;
+    }
     return m_connection != nullptr;
 }

@@ -61,6 +61,7 @@ public:
         : m_settings(settings)
         , m_network(network)
         , m_callback(std::move(callback))
+        , m_valid(true)
     {}
 
     virtual ~NetworkHandler() = default;
@@ -75,6 +76,8 @@ public:
     void setConnection(std::shared_ptr<ConnectionHandle> connection);
     bool isConnected();
 
+    void invalidate();
+
 private:
     const SessionSettings& m_settings;
     Network& m_network;
@@ -82,6 +85,8 @@ private:
 
     std::recursive_mutex m_mutex;
     std::shared_ptr<ConnectionHandle> m_connection;
+
+    std::atomic<bool> m_valid;
 
     CREATE_LOGGER("Network");
 };
@@ -190,6 +195,8 @@ struct WriteBuffer
 
     std::list<MsgMetadata> m_meta_queue;
     std::list<MsgMetadata> m_meta_buffer;
+
+    std::atomic<bool> m_valid = true;
 };
 
 class WriterThread
@@ -218,9 +225,10 @@ public:
 private:
     std::atomic<bool> m_running;
     std::mutex m_mutex;
-    std::condition_variable m_cv;
+    std::condition_variable_any m_cv;
     std::thread m_thread;
 
+    std::shared_mutex m_bufferMutex;
     std::unordered_map<int, WriteBuffer> m_bufferMap;
 
     Network& m_network;

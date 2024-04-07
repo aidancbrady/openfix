@@ -14,7 +14,7 @@ public:
 
     virtual void cache(int seqnum, const Message& msg) = 0;
 
-    using MessageConsumer = std::function<void(int, Message)>;
+    using MessageConsumer = std::function<void(int, const Message&)>;
     virtual void getMessages(int begin, int end, MessageConsumer consumer) = 0;
 
     virtual void setSenderSeqNum(int num) = 0;

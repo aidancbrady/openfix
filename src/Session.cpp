@@ -79,6 +79,7 @@ void Session::processMessage(const Message& msg, long time)
     auto msgType = msg.getHeader().getField(FIELD::MsgType);
 
     if (!validateMessage(msg, time)) {
+        LOG_ERROR("Message failed validations: " << msg);
         return;
     }
 
@@ -95,13 +96,14 @@ void Session::processMessage(const Message& msg, long time)
     }
 
     if (!validateSeqNum(msg)) {
+        LOG_INFO("Message failed SeqNum validation: " << msg);
         return;
     }
 
     if (msgType == MESSAGE::LOGOUT) {
         if (m_state == SessionState::LOGOUT) {
             LOG_INFO("Successful logout");
-            m_state = SessionState::LOGOUT;
+            m_state = SessionState::LOGON;
             m_network->disconnect();
             return;
         }
@@ -138,7 +140,7 @@ void Session::internal_send(const Message& msg, SendCallback_T callback)
         auto msg_str = msg.toString();
         LOG_DEBUG("Sending: " << msg_str);
         m_logger.logMessage(msg_str, Direction::OUTBOUND);
-        m_network->send({msg.toString(true)});
+        m_network->send({msg.toString(true), callback});
 
         // update our heartbeat monitor as we just sent data
         m_lastSentHeartbeat = Utils::getEpochMillis();
@@ -183,13 +185,13 @@ void Session::internal_update()
         }
     }
 
-    if (m_state == SessionState::LOGOUT) {
+    if (m_state == SessionState::LOGOUT && m_state != SessionState::KILLING) {
         if ((time - m_logoutTime) >= 2 * m_heartbeatInterval) {
             terminate("Didn't receive logout ack in time");
         }
     }
 
-    if (m_state != SessionState::LOGON && m_state != SessionState::LOGOUT) {
+    if (m_state != SessionState::LOGON && m_state != SessionState::LOGOUT && m_state != SessionState::KILLING) {
         if ((time - m_lastSentHeartbeat) >= m_heartbeatInterval) {
             LOG_DEBUG("Heartbeat threshold exceeded (" << (time - m_lastSentHeartbeat) << " >= " << m_heartbeatInterval << "), sending heartbeat");
             sendHeartbeat(time);
@@ -201,6 +203,7 @@ void Session::internal_update()
             if ((time - m_lastRecvHeartbeat) >= heartbeatTimeout) {
                 LOG_WARN("Heartbeat timeout exceeded (" << (time - m_lastRecvHeartbeat) << " >= " << heartbeatTimeout << "), sending test request");
                 sendTestRequest();
+                m_state = SessionState::TEST_REQUEST;
             }
         }
     }
@@ -222,7 +225,7 @@ void Session::handleLogon(const Message& msg)
 
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
     if (!isPosDup && seqNum < m_cache->getTargetSeqNum()) {
-        logout("MsgSeqNum too low, expected " + m_cache->getTargetSeqNum(), true);
+        logout("MsgSeqNum too low, expected " + std::to_string(m_cache->getTargetSeqNum()), true);
         return;
     }
 
@@ -235,6 +238,7 @@ void Session::handleLogon(const Message& msg)
     m_state = SessionState::READY;
 
     if (seqNum > m_cache->getTargetSeqNum()) {
+        LOG_INFO("Incoming MsgSeqNum higher than expected, requesting resend from " << m_cache->getTargetSeqNum());
         sendResendRequest(m_cache->getTargetSeqNum(), 0);
         return;
     }
@@ -244,6 +248,7 @@ void Session::handleLogon(const Message& msg)
 
 void Session::handleResendRequest(const Message& msg)
 {
+    int seqNo = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
     int beginSeqNo = std::stoi(msg.getBody().getField(FIELD::BeginSeqNo));
     int endSeqNo = std::stoi(msg.getBody().getField(FIELD::EndSeqNo));
 
@@ -270,12 +275,20 @@ void Session::handleResendRequest(const Message& msg)
         // expect to send the next message
         ptr = seqno + 1;
     });
-    --ptr;
+
+    if (ptr != beginSeqNo)
+        --ptr;
 
     endSeqNo = endSeqNo != 0 ? endSeqNo : getSenderSeqNum();
     // send final gapfill if we need to
     if (ptr < endSeqNo)
         sendSequenceReset(ptr, endSeqNo);
+
+    // unless we're waiting on replay ourselves, we would expect the seqnum to be incremented
+    if (seqNo == getTargetSeqNum())
+        m_cache->nextTargetSeqNum();
+    else
+        LOG_DEBUG("Not increasing target MsgSeqNum, awaiting our own replay");
 }
 
 void Session::handleSequenceReset(const Message& msg)
@@ -303,8 +316,7 @@ void Session::handleSequenceReset(const Message& msg)
 
 void Session::sendLogon()
 {
-    Message msg;
-    msg.getHeader().setField(FIELD::MsgType, MESSAGE::LOGON);
+    auto msg = m_dictionary->create(MESSAGE::LOGON);
     msg.getBody().setField(FIELD::HeartBtInt, std::to_string(m_heartbeatInterval / 1000));
     msg.getBody().setField(FIELD::EncryptMethod, "0");
     send(msg);
@@ -315,8 +327,7 @@ void Session::sendLogon()
 
 void Session::sendLogout(const std::string& reason, bool terminate)
 {
-    Message msg;
-    msg.getHeader().setField(FIELD::MsgType, MESSAGE::LOGOUT);
+    auto msg = m_dictionary->create(MESSAGE::LOGOUT);
     if (!reason.empty())
         msg.getBody().setField(FIELD::Text, reason);
 
@@ -328,8 +339,7 @@ void Session::sendLogout(const std::string& reason, bool terminate)
 
 void Session::sendResendRequest(int from, int to)
 {
-    Message msg;
-    msg.getHeader().setField(FIELD::MsgType, MESSAGE::RESEND_REQUEST);
+    auto msg = m_dictionary->create(MESSAGE::RESEND_REQUEST);
     msg.getBody().setField(FIELD::BeginSeqNo, std::to_string(from));
     msg.getBody().setField(FIELD::EndSeqNo, std::to_string(to));
     send(msg);
@@ -337,20 +347,21 @@ void Session::sendResendRequest(int from, int to)
 
 void Session::sendSequenceReset(int seqno, int new_seqno, bool gapfill)
 {
-    Message msg;
+    auto msg = m_dictionary->create(MESSAGE::SEQUENCE_RESET);
     populateMessage(msg);
     msg.getHeader().setField(FIELD::MsgSeqNum, std::to_string(seqno));
-    msg.getHeader().setField(FIELD::MsgType, MESSAGE::SEQUENCE_RESET);
-    msg.getBody().setField(FIELD::NewSeqNo, std::to_string(seqno));
+    msg.getBody().setField(FIELD::NewSeqNo, std::to_string(new_seqno));
 
     if (gapfill)
         msg.getBody().setField(FIELD::GapFillFlag, "Y");
 
-    send(msg);
+    internal_send(msg, {});
 }
 
 void Session::logout(const std::string& reason, bool terminate)
 {
+    LOG_INFO("Logging out (" << (terminate ? "terminal" : "clean") << "), reason: " << reason);
+
     if (terminate)
         m_state = SessionState::KILLING;
     else
@@ -361,8 +372,7 @@ void Session::logout(const std::string& reason, bool terminate)
 
 void Session::sendHeartbeat(long time, std::string testReqID)
 {
-    Message msg;
-    msg.getHeader().setField(FIELD::MsgType, MESSAGE::HEARTBEAT);
+    auto msg = m_dictionary->create(MESSAGE::HEARTBEAT);
     if (!testReqID.empty())
         msg.getBody().setField(FIELD::TestReqID, testReqID);
     send(msg);
@@ -370,16 +380,14 @@ void Session::sendHeartbeat(long time, std::string testReqID)
 
 void Session::sendTestRequest()
 {
-    Message msg;
-    msg.getHeader().setField(FIELD::MsgType, MESSAGE::TEST_REQUEST);
+    auto msg = m_dictionary->create(MESSAGE::TEST_REQUEST);
     msg.getBody().setField(FIELD::TestReqID, std::to_string(++m_testReqID));
     send(msg);
 }
 
 void Session::sendReject(const Message& rejectedMsg, SessionRejectReason reason, std::string text)
 {
-    Message msg;
-    msg.getHeader().setField(FIELD::MsgType, MESSAGE::REJECT);
+    auto msg = m_dictionary->create(MESSAGE::REJECT);
     msg.getBody().setField(FIELD::RefSeqNum, rejectedMsg.getHeader().getField(FIELD::MsgSeqNum));
     msg.getBody().setField(FIELD::SessionRejectReason, std::to_string(static_cast<int>(reason)));
     if (!text.empty())
@@ -479,7 +487,7 @@ bool Session::validateSeqNum(const Message& msg)
     }
 
     if (seqNum < getTargetSeqNum()) {
-        logout("MsgSeqNum too low, expected " + m_cache->getTargetSeqNum(), true);
+        logout("MsgSeqNum too low, expected " + std::to_string(m_cache->getTargetSeqNum()), true);
     } else if (seqNum) {
         // queue this message and send resend request for gap
         m_cache->getInboundQueue()[seqNum] = msg;

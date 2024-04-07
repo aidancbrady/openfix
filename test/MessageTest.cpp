@@ -41,6 +41,15 @@ TEST_F(MessageTest, FieldOrder)
     msg.getHeader().setField(34, "10");
     msg.getHeader().setField(35, "0");
     EXPECT_EQ(msg.toString(), "9=11|35=0|34=10|10=181|");
+
+    msg = dict->create("4");
+    msg.getHeader().setField(8, "FIX.4.2");
+    msg.getHeader().setField(49, "SENDER");
+    msg.getHeader().setField(56, "TARGET");
+    msg.getHeader().setField(52, "TIME");
+    msg.getHeader().setField(34, "TEST");
+
+    EXPECT_EQ(msg.toString(), "8=FIX.4.2|9=41|35=4|49=SENDER|56=TARGET|34=TEST|52=TIME|10=106|");
 }
 
 TEST_F(MessageTest, SimpleTest)

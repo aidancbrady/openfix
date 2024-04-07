@@ -8,6 +8,7 @@
 #include <unordered_set>
 
 #include "Config.h"
+#include "Fields.h"
 #include "Message.h"
 
 class Dictionary
@@ -26,6 +27,8 @@ public:
 
         msg.getHeader().setSpec(getHeaderSpec());
         msg.getTrailer().setSpec(getTrailerSpec());
+
+        msg.getHeader().setField(FIELD::MsgType, msg_type);
 
         return msg;
     }
