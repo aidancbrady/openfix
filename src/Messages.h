@@ -12,5 +12,6 @@ inline std::string SEQUENCE_RESET = "4";
 inline std::string LOGOUT = "5";
 inline std::string LOGON = "A";
 
-inline static std::unordered_set<std::string> SESSION_MSGS = {HEARTBEAT, TEST_REQUEST, RESEND_REQUEST, REJECT, SEQUENCE_RESET, LOGOUT, LOGON};
+// no REJECT, this can be retransmitted in a resend
+inline static std::unordered_set<std::string> SESSION_MSGS = {HEARTBEAT, TEST_REQUEST, RESEND_REQUEST, SEQUENCE_RESET, LOGOUT, LOGON};
 }  // namespace MESSAGE

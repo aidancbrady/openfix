@@ -105,10 +105,7 @@ public:
         return m_fields.erase(tag);
     }
 
-    void setField(int tag, std::string value)
-    {
-        m_fields[tag] = value;
-    }
+    void setField(int tag, std::string value, bool order = true);
 
     const auto& getFields() const
     {

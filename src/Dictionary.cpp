@@ -8,9 +8,18 @@
 #include "Fields.h"
 #include "pugixml.hpp"
 
-enum class MessageState { HEADER, BODY, TRAILER };
+enum class MessageState {
+    HEADER,
+    BODY,
+    TRAILER
+};
 
-enum class ParserState { START, NEXT, KEY, VAL };
+enum class ParserState {
+    START,
+    NEXT,
+    KEY,
+    VAL
+};
 
 struct ParserGroupInfo
 {
@@ -43,7 +52,7 @@ struct ParserGroupInfo
     {                                              \
         std::ostringstream ostr;                   \
         ostr << msg;                               \
-        TRY_LOG_ERROR(ostr.str());                 \
+        TRY_LOG_ERROR(msg);                        \
         if (!relaxedParsing)                       \
             throw MessageParsingError(ostr.str()); \
     }
@@ -130,8 +139,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
                 if (tag == FIELD::BodyLength)
                     bodyLengthStart = i + 1;
-
-                fieldMap.setField(tag, std::move(val));
+                // don't order, we batch order fields after parsing is done
+                fieldMap.setField(tag, std::move(val), false);
 
                 key.clear();
                 value.clear();
@@ -263,10 +272,6 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 // missing tag
                 if (state == ParserState::START || state == ParserState::NEXT) {
                     TRY_LOG_THROW("Missing tag (idx=" << i << ")");
-                }
-                // multiple assignments
-                else if (state == ParserState::VAL) {
-                    TRY_LOG_THROW("Multiple assignments (idx=" << i << ")");
                 }
 
                 fail = true;

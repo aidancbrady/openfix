@@ -53,6 +53,11 @@ class LinkedHashMap
         {
             return &(*m_it);
         }
+
+        IteratorType get_list_it()
+        {
+            return m_it;
+        }
     };
 
     using iterator = BaseIterator<typename list_type::iterator>;
@@ -132,6 +137,17 @@ public:
         auto list_it = m_list.emplace(m_list.end(), value);
         m_map[value.first] = list_it;
         return {iterator(list_it), true};
+    }
+
+    iterator insert(iterator pos, const value_type& value)
+    {
+        // make sure this doesn't already exist
+        if (find(value.first) != end())
+            return end();
+
+        auto new_it = m_list.insert(pos.get_list_it(), value);
+        m_map[value.first] = new_it;
+        return iterator(new_it);
     }
 
     void erase(iterator it)

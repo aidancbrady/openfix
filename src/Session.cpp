@@ -89,6 +89,9 @@ void Session::processMessage(const Message& msg, long time)
     } else if (msgType == MESSAGE::LOGON) {
         handleLogon(msg);
         return;
+    } else if (msgType == MESSAGE::RESEND_REQUEST) {
+        handleResendRequest(msg);
+        return;
     }
 
     if (!validateSeqNum(msg)) {
@@ -116,8 +119,6 @@ void Session::processMessage(const Message& msg, long time)
         auto test_id = msg.getBody().getField(FIELD::TestReqID);
         LOG_DEBUG("Responding to test request ID=" << test_id << " with heartbeat");
         sendHeartbeat(time, test_id);
-    } else if (msgType == MESSAGE::RESEND_REQUEST) {
-        handleResendRequest(msg);
     } else if (msgType == MESSAGE::REJECT) {
         LOG_INFO("Received reject message: " << msg);
     }
@@ -129,9 +130,6 @@ void Session::send(Message& msg, SendCallback_T callback)
     m_cache->cache(seqnum, msg);
     m_cache->nextSenderSeqNum();
     internal_send(msg, callback);
-
-    // update our heartbeat monitor as we just sent data
-    m_lastSentHeartbeat = Utils::getEpochMillis();
 }
 
 void Session::internal_send(const Message& msg, SendCallback_T callback)
@@ -141,6 +139,9 @@ void Session::internal_send(const Message& msg, SendCallback_T callback)
         LOG_DEBUG("Sending: " << msg_str);
         m_logger.logMessage(msg_str, Direction::OUTBOUND);
         m_network->send({msg.toString(true)});
+
+        // update our heartbeat monitor as we just sent data
+        m_lastSentHeartbeat = Utils::getEpochMillis();
     }
 }
 
@@ -259,19 +260,22 @@ void Session::handleResendRequest(const Message& msg)
 
         // send gapfill if we need to
         if (seqno != ptr)
-            sendSequenceReset(seqno);
+            sendSequenceReset(ptr, seqno);
 
         msg.getHeader().setField(FIELD::PosDupFlag, "Y");
         msg.getHeader().setField(FIELD::OrigSendingTime, msg.getHeader().getField(FIELD::SendingTime));
         msg.getHeader().setField(FIELD::SendingTime, Utils::getUTCTimestamp());
 
-        m_network->send({msg.toString(), {}});
-        ptr = seqno;
+        internal_send(msg, {});
+        // expect to send the next message
+        ptr = seqno + 1;
     });
+    --ptr;
 
+    endSeqNo = endSeqNo != 0 ? endSeqNo : getSenderSeqNum();
     // send final gapfill if we need to
     if (ptr < endSeqNo)
-        sendSequenceReset(endSeqNo);
+        sendSequenceReset(ptr, endSeqNo);
 }
 
 void Session::handleSequenceReset(const Message& msg)
@@ -331,13 +335,17 @@ void Session::sendResendRequest(int from, int to)
     send(msg);
 }
 
-void Session::sendSequenceReset(int seqno, bool gapfill)
+void Session::sendSequenceReset(int seqno, int new_seqno, bool gapfill)
 {
     Message msg;
+    populateMessage(msg);
+    msg.getHeader().setField(FIELD::MsgSeqNum, std::to_string(seqno));
     msg.getHeader().setField(FIELD::MsgType, MESSAGE::SEQUENCE_RESET);
     msg.getBody().setField(FIELD::NewSeqNo, std::to_string(seqno));
+
     if (gapfill)
         msg.getBody().setField(FIELD::GapFillFlag, "Y");
+
     send(msg);
 }
 

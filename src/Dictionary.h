@@ -15,12 +15,45 @@ class Dictionary
 public:
     Message parse(const SessionSettings& settings, const std::string& text) const;
 
+    Message create(const std::string& msg_type) const
+    {
+        Message msg;
+
+        auto msg_spec = getMessageSpec(msg_type);
+        if (msg_spec == nullptr)
+            throw MessageParsingError("Unknown message: " + msg_type);
+        msg.getBody().setSpec(msg_spec);
+
+        msg.getHeader().setSpec(getHeaderSpec());
+        msg.getTrailer().setSpec(getTrailerSpec());
+
+        return msg;
+    }
+
     FieldType getFieldType(int tag) const
     {
         auto it = m_fields.find(tag);
         if (it == m_fields.end())
             return FieldType::UNKNOWN;
         return it->second;
+    }
+
+    std::shared_ptr<GroupSpec> getMessageSpec(const std::string& msg_type) const
+    {
+        auto it = m_bodySpecs.find(msg_type);
+        if (it == m_bodySpecs.end())
+            return nullptr;
+        return it->second;
+    }
+
+    const std::shared_ptr<GroupSpec>& getHeaderSpec() const
+    {
+        return m_headerSpec;
+    }
+
+    const std::shared_ptr<GroupSpec>& getTrailerSpec() const
+    {
+        return m_trailerSpec;
     }
 
 private:

@@ -1,23 +1,22 @@
 #pragma once
 
-#include "Config.h"
-#include "Message.h"
-#include "Network.h"
-#include "Dictionary.h"
-#include "FIXCache.h"
-#include "FIXStore.h"
-#include "FIXLogger.h"
-#include "Fields.h"
-
-#include <openfix/Log.h>
 #include <openfix/Dispatcher.h>
+#include <openfix/Log.h>
 
-#include <memory>
 #include <atomic>
 #include <functional>
+#include <memory>
 
-enum class SessionState
-{
+#include "Config.h"
+#include "Dictionary.h"
+#include "FIXCache.h"
+#include "FIXLogger.h"
+#include "FIXStore.h"
+#include "Fields.h"
+#include "Message.h"
+#include "Network.h"
+
+enum class SessionState {
     LOGON,
     READY,
     TEST_REQUEST,
@@ -30,7 +29,7 @@ struct SessionDelegate
     ~SessionDelegate() = default;
 
     virtual void onMessage(const Message& msg) const {};
-    
+
     virtual void onLogon() const {};
     virtual void onLogout() const {};
 };
@@ -100,7 +99,7 @@ private:
     void sendLogon();
     void sendLogout(const std::string& reason, bool terminate);
     void sendResendRequest(int from, int to);
-    void sendSequenceReset(int seqno, bool gapfill = true);
+    void sendSequenceReset(int seqno, int new_seqno, bool gapfill = true);
     void sendTestRequest();
     void sendReject(const Message& msg, SessionRejectReason reason, std::string text = "");
 

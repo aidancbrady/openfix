@@ -97,8 +97,8 @@ SessionData StoreHandle::load()
 
             if (type == WriteType::SENDER_SEQ_NUM)
                 ret.m_senderSeqNum = seqNum;
-            if (type == WriteType::TARGET_SEQ_NUM)
-                ret.m_targetSeqNum = seqNum;
+            // if (type == WriteType::TARGET_SEQ_NUM)
+            //     ret.m_targetSeqNum = seqNum;
         } else if (type == WriteType::MSG) {
             std::ostringstream msg;
 
