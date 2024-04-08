@@ -726,78 +726,73 @@ void WriterThread::process()
 {
     while (m_running.load(std::memory_order_acquire)) {
         {
-            std::unique_lock lock(m_bufferMutex);
+            std::unique_lock lock(m_mutex);
             m_cv.wait(lock);
         }
 
-        std::vector<int> invalid_buffers;
         if (!m_running.load(std::memory_order_acquire))
             return;
 
+        std::vector<std::pair<int, WriteBuffer&>> buffers;
         {
-            std::shared_lock lock(m_bufferMutex);
+            std::unique_lock lock(m_mutex);
             for (auto& [fd, buffer] : m_bufferMap) {
-                {
-                    std::lock_guard lock(m_mutex);
-                    if (!buffer.m_valid.load(std::memory_order_acquire)) {
-                        invalid_buffers.push_back(fd);
-                        continue;
-                    }
-
-                    if (!buffer.m_queue.empty())
-                        buffer.m_queue.swap(buffer.m_buffer);
-                    if (!buffer.m_meta_queue.empty())
-                        buffer.m_meta_queue.swap(buffer.m_meta_buffer);
-                }
-
-                if (buffer.m_buffer.empty())
-                    continue;
-
-                size_t sent = 0;
-                while (sent < buffer.m_buffer.length()) {
-                    ssize_t ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent, MSG_NOSIGNAL);
-                    if (ret < 0) {
-                        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                            LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
-                            buffer.m_buffer.clear();
-                            buffer.m_meta_buffer.clear();
-                            break;
-                        }
-                        break;
-                    }
-                    sent += ret;
-                }
-
-                if (!buffer.m_meta_buffer.empty()) {
-                    size_t processed = 0;
-
-                    while (!buffer.m_meta_buffer.empty() && processed + buffer.m_meta_buffer.front().m_msg_size <= sent) {
-                        processed += buffer.m_meta_buffer.front().m_msg_size;
-                        if (buffer.m_meta_buffer.front().m_callback)
-                            buffer.m_meta_buffer.front().m_callback();
-                        buffer.m_meta_buffer.erase(buffer.m_meta_buffer.begin());
-                    }
-
-                    // if sent bytes did not complete the next message and partial data remains
-                    if (processed < sent && !buffer.m_meta_buffer.empty()) {
-                        buffer.m_meta_buffer.front().m_msg_size -= (sent - processed);
-                    }
-                }
-
-                if (sent < buffer.m_buffer.length()) {
-                    // Not all data was sent; store the unsent part back in m_queue for later.
-                    std::lock_guard lock(m_mutex);
-                    buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
-                }
-
-                buffer.m_buffer.clear();
+                if (!buffer.m_queue.empty())
+                    buffer.m_queue.swap(buffer.m_buffer);
+                if (!buffer.m_meta_queue.empty())
+                    buffer.m_meta_queue.swap(buffer.m_meta_buffer);
+                buffers.emplace_back(fd, buffer);
             }
         }
 
-        {
-            std::unique_lock lock(m_bufferMutex);
-            for (int invalid_fd : invalid_buffers)
-                m_bufferMap.erase(invalid_fd);
+        for (auto& [fd, buffer] : buffers) {
+            if (!buffer.m_valid.load(std::memory_order_acquire)) {
+                std::unique_lock lock(m_mutex);
+                m_bufferMap.erase(fd);
+                continue;
+            }
+
+            if (buffer.m_buffer.empty())
+                continue;
+
+            size_t sent = 0;
+            while (sent < buffer.m_buffer.length()) {
+                ssize_t ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent, MSG_NOSIGNAL);
+                if (ret < 0) {
+                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                        LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
+                        buffer.m_buffer.clear();
+                        buffer.m_meta_buffer.clear();
+                        break;
+                    }
+                    break;
+                }
+                sent += ret;
+            }
+
+            if (!buffer.m_meta_buffer.empty()) {
+                size_t processed = 0;
+
+                while (!buffer.m_meta_buffer.empty() && processed + buffer.m_meta_buffer.front().m_msg_size <= sent) {
+                    processed += buffer.m_meta_buffer.front().m_msg_size;
+                    if (buffer.m_meta_buffer.front().m_callback)
+                        buffer.m_meta_buffer.front().m_callback();
+                    buffer.m_meta_buffer.erase(buffer.m_meta_buffer.begin());
+                }
+
+                // if sent bytes did not complete the next message and partial data remains
+                if (processed < sent && !buffer.m_meta_buffer.empty()) {
+                    buffer.m_meta_buffer.front().m_msg_size -= (sent - processed);
+                }
+            }
+
+            if (sent < buffer.m_buffer.length()) {
+                // Not all data was sent; store the unsent part back in m_queue for later.
+                std::lock_guard lock(m_mutex);
+                buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
+            }
+
+            buffer.m_buffer.clear();
         }
     }
 }
@@ -805,7 +800,6 @@ void WriterThread::process()
 void WriterThread::send(int fd, MsgPacket&& msg)
 {
     {
-        // TODO this is very unsafe and needs to be fixed
         std::lock_guard lock(m_mutex);
         m_bufferMap[fd].m_queue.append(msg.m_msg);
         m_bufferMap[fd].m_meta_queue.push_back(std::move(msg));

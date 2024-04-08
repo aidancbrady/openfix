@@ -228,7 +228,6 @@ private:
     std::condition_variable_any m_cv;
     std::thread m_thread;
 
-    std::shared_mutex m_bufferMutex;
     std::unordered_map<int, WriteBuffer> m_bufferMap;
 
     Network& m_network;

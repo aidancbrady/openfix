@@ -398,7 +398,7 @@ void Session::sendReject(const Message& rejectedMsg, SessionRejectReason reason,
 void Session::terminate(const std::string& reason)
 {
     LOG_ERROR("Terminating connection: " << reason);
-    m_logger.logEvent(reason);
+    m_logger.logEvent("Terminating: " + reason);
     m_network->disconnect();
     m_state = SessionState::LOGON;
 }
@@ -487,7 +487,7 @@ bool Session::validateSeqNum(const Message& msg)
     }
 
     if (seqNum < getTargetSeqNum()) {
-        logout("MsgSeqNum too low, expected " + std::to_string(m_cache->getTargetSeqNum()), true);
+        logout("MsgSeqNum too low, expected " + std::to_string(m_cache->getTargetSeqNum()) + ", received " + std::to_string(seqNum), true);
     } else if (seqNum) {
         // queue this message and send resend request for gap
         m_cache->getInboundQueue()[seqNum] = msg;
