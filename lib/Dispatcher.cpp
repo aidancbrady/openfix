@@ -10,12 +10,14 @@
 
 Dispatcher::Dispatcher(size_t threads)
 {
-    for (size_t i = 0; i < threads; ++i) m_workers.push_back(std::make_unique<Worker>());
+    for (size_t i = 0; i < threads; ++i)
+        m_workers.push_back(std::make_unique<Worker>());
 }
 
 Dispatcher::~Dispatcher()
 {
-    for (auto& worker : m_workers) worker->stop();
+    for (auto& worker : m_workers)
+        worker->stop();
     for (auto& worker : m_workers)
         if (worker->m_thread.joinable())
             worker->m_thread.join();
@@ -53,15 +55,23 @@ void Worker::stop()
     m_cv.notify_one();
 }
 
-void Dispatcher::dispatch(Callback callback) { dispatch(std::move(callback), std::rand()); }
+void Dispatcher::dispatch(Callback callback)
+{
+    dispatch(std::move(callback), std::rand());
+}
 
-void Dispatcher::dispatch(Callback callback, int hash) { m_workers[hash % m_workers.size()]->dispatch(std::move(callback)); }
+void Dispatcher::dispatch(Callback callback, int hash)
+{
+    m_workers[hash % m_workers.size()]->dispatch(std::move(callback));
+}
 
 ////////////////////////////////////////////
 //                 Timer                  //
 ////////////////////////////////////////////
 
-Timer::Timer() : m_stop(false), m_timerCount(0)
+Timer::Timer()
+    : m_stop(false)
+    , m_timerCount(0)
 {
     m_thread = std::thread([&]() { run(); });
 }

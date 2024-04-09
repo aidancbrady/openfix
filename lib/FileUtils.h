@@ -21,12 +21,19 @@ public:
     explicit WriterInstance(std::string path, std::condition_variable& cv)
         : m_path(std::move(path))
         , m_cv(cv)
+        , m_shouldReset(false)
     {
         m_buffer.reserve(BUF_SIZE);
         m_queue.reserve(BUF_SIZE);
     }
 
     void write(const std::string& text);
+
+    void reset()
+    {
+        m_shouldReset = true;
+        m_cv.notify_one();
+    }
 
 private:
     std::string m_buffer;
@@ -39,6 +46,8 @@ private:
     std::string m_path;
 
     std::condition_variable& m_cv;
+
+    std::atomic<bool> m_shouldReset;
 
     friend class FileWriter;
 };

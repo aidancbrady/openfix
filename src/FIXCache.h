@@ -29,6 +29,7 @@ public:
     virtual std::map<int, Message>& getInboundQueue() = 0;
 
     virtual void load() = 0;
+    virtual void reset() = 0;
 };
 
 class MemoryCache : public IFIXCache
@@ -52,6 +53,7 @@ public:
     std::map<int, Message>& getInboundQueue() override;
 
     void load() override;
+    void reset() override;
 
 private:
     const SessionSettings& m_settings;

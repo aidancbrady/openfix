@@ -9,7 +9,8 @@
 
 #define READ_BUF 1024
 
-enum class WriteType : uint8_t {
+enum class WriteType : uint8_t
+{
     MSG,
     SENDER_SEQ_NUM,
     TARGET_SEQ_NUM
@@ -36,10 +37,7 @@ StoreHandle FileStore::createStore(const SessionSettings& settings)
     std::string path = PlatformSettings::getString(PlatformSettings::DATA_PATH) + "/" + sessionID + ".data";
 
     auto& writer = *m_writer.createInstance(path);
-
-    auto storeFunc = [&](const std::string& msg) { writer.write(msg); };
-
-    return createHandle(settings, storeFunc, path);
+    return createHandle(settings, writer, path);
 }
 
 void StoreHandle::store(int seqnum, const std::string& msg)
@@ -50,7 +48,7 @@ void StoreHandle::store(int seqnum, const std::string& msg)
     size_t len = msg.length();
     ostr.write(reinterpret_cast<char*>(&len), sizeof(len));
     ostr << msg;
-    m_writeFunc(ostr.str());
+    m_writer.write(ostr.str());
 }
 
 void StoreHandle::setSenderSeqNum(int num)
@@ -58,7 +56,7 @@ void StoreHandle::setSenderSeqNum(int num)
     std::ostringstream ostr;
     ostr << static_cast<char>(WriteType::SENDER_SEQ_NUM);
     ostr.write(reinterpret_cast<char*>(&num), sizeof(num));
-    m_writeFunc(ostr.str());
+    m_writer.write(ostr.str());
 }
 
 void StoreHandle::setTargetSeqNum(int num)
@@ -66,7 +64,7 @@ void StoreHandle::setTargetSeqNum(int num)
     std::ostringstream ostr;
     ostr << static_cast<char>(WriteType::TARGET_SEQ_NUM);
     ostr.write(reinterpret_cast<char*>(&num), sizeof(num));
-    m_writeFunc(ostr.str());
+    m_writer.write(ostr.str());
 }
 
 SessionData StoreHandle::load()
@@ -130,4 +128,10 @@ SessionData StoreHandle::load()
     LOG_INFO("Loaded " << cnt << " messages from file store.");
 
     return ret;
+}
+
+void StoreHandle::reset()
+{
+    LOG_INFO("Resetting session store, wiping data file...");
+    m_writer.reset();
 }

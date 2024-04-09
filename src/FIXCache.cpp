@@ -22,6 +22,17 @@ void MemoryCache::load()
     }
 }
 
+void MemoryCache::reset()
+{
+    m_messages.clear();
+    m_inboundQueue.clear();
+
+    m_senderSeqNum = 0;
+    m_targetSeqNum = 0;
+
+    m_store.reset();
+}
+
 int MemoryCache::getSenderSeqNum()
 {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);

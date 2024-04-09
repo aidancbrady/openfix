@@ -28,21 +28,22 @@ public:
     void setTargetSeqNum(int num);
 
     SessionData load();
+    void reset();
 
 private:
-    StoreHandle(const SessionSettings& settings, WriteFunction writeFunc, std::string path)
+    StoreHandle(const SessionSettings& settings, WriterInstance& writer, std::string path)
         : m_settings(settings)
-        , m_writeFunc(std::move(writeFunc))
+        , m_writer(writer)
         , m_path(std::move(path))
     {}
 
     void write(const std::string& msg)
     {
-        m_writeFunc(msg);
+        m_writer.write(msg);
     }
 
     const SessionSettings& m_settings;
-    WriteFunction m_writeFunc;
+    WriterInstance& m_writer;
     std::string m_path;
 
     CREATE_LOGGER("StoreHandle");
@@ -61,9 +62,9 @@ public:
     virtual StoreHandle createStore(const SessionSettings& settings) = 0;
 
 protected:
-    StoreHandle createHandle(const SessionSettings& settings, WriteFunction writeFunc, std::string path) const
+    StoreHandle createHandle(const SessionSettings& settings, WriterInstance& writer, std::string path) const
     {
-        return {settings, std::move(writeFunc), std::move(path)};
+        return {settings, writer, std::move(path)};
     }
 };
 

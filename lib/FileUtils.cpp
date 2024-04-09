@@ -58,8 +58,21 @@ void FileWriter::process()
             // swap buffer
             {
                 std::lock_guard<std::mutex> lock(instance.m_mutex);
-                if (!instance.m_queue.empty())
+
+                if (instance.m_shouldReset) {
+                    instance.m_shouldReset = false;
+
+                    instance.m_queue.clear();
+                    instance.m_buffer.clear();
+
+                    // re-open the file with truncation option to wipe
+                    instance.m_stream.close();
+                    instance.m_stream.open(instance.m_path, std::ofstream::out | std::ofstream::trunc);
+                    instance.m_stream.close();
+                    continue;
+                } else if (!instance.m_queue.empty()) {
                     instance.m_queue.swap(instance.m_buffer);
+                }
             }
 
             if (instance.m_buffer.empty())

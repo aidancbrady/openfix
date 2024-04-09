@@ -50,7 +50,8 @@ inline constexpr char TAG_ASSIGNMENT_CHAR = '=';
     F(DATA)
 
 #define F(x) x
-enum class FieldType {
+enum class FieldType
+{
     F(FIELD_TYPES)
 };
 #undef F

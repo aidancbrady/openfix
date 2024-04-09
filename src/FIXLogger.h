@@ -15,7 +15,8 @@
 #include "Config.h"
 #include "Message.h"
 
-enum class Direction {
+enum class Direction
+{
     INBOUND,
     OUTBOUND
 };

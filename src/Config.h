@@ -13,7 +13,8 @@
 
 using SessionID_T = std::string;
 
-enum class SessionType {
+enum class SessionType
+{
     UNKNOWN,
     ACCEPTOR,
     INITIATOR,
@@ -218,6 +219,10 @@ struct SessionSettings : Config<SessionSettings>
     static inline ConfigItem<std::string> TARGET_COMP_ID = createString("TargetCompID");
 
     static inline ConfigItem<bool> IS_TEST = createBool("TestSession", false);
+    static inline ConfigItem<bool> SEND_NEXT_EXPECTED_MSG_SEQ_NUM = createBool("SendNextExpectedMsgSeqNum", true);
+
+    static inline ConfigItem<bool> RESET_SEQ_NUM_ON_LOGON = createBool("ResetSeqNumOnLogon", false);
+    static inline ConfigItem<bool> ALLOW_RESET_SEQ_NUM_FLAG = createBool("AllowResetSeqNumFlag", false);
 
     static inline ConfigItem<std::string> FIX_DICTIONARY = createString("FIXDictionary");
 

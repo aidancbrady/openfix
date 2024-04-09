@@ -16,7 +16,8 @@
 #include "Message.h"
 #include "Network.h"
 
-enum class SessionState {
+enum class SessionState
+{
     LOGON,
     READY,
     TEST_REQUEST,
@@ -75,8 +76,10 @@ public:
 
 private:
     bool load();
+    void reset();
 
     int populateMessage(Message& msg);
+    void runMessageRecovery(int from, int to);
 
     void internal_update();
     void internal_send(const Message& msg, SendCallback_T callback);
@@ -96,7 +99,7 @@ private:
     void handleSequenceReset(const Message& msg);
 
     void sendHeartbeat(long time, std::string testReqID = "");
-    void sendLogon();
+    void sendLogon(bool reset);
     void sendLogout(const std::string& reason, bool terminate);
     void sendResendRequest(int from, int to);
     void sendSequenceReset(int seqno, int new_seqno, bool gapfill = true);
@@ -124,6 +127,8 @@ private:
 
     long m_lastSentHeartbeat = 0;
     long m_lastRecvHeartbeat = 0;
+    long m_lastSentTestRequest = 0;
+
     long m_heartbeatInterval = 0;
 
     long m_lastLogon = 0;

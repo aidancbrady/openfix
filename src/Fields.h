@@ -31,7 +31,8 @@ inline constexpr int TestMessageIndicator = 464;
 inline constexpr int NextExpectedMsgSeqNum = 789;
 }  // namespace FIELD
 
-enum class SessionRejectReason {
+enum class SessionRejectReason
+{
     InvalidTagNum = 0,
     RequiredTagMissing = 1,
     TagNotDefinedForMsg = 2,

@@ -8,13 +8,15 @@
 #include "Fields.h"
 #include "pugixml.hpp"
 
-enum class MessageState {
+enum class MessageState
+{
     HEADER,
     BODY,
     TRAILER
 };
 
-enum class ParserState {
+enum class ParserState
+{
     START,
     NEXT,
     KEY,
