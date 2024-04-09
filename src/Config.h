@@ -206,6 +206,8 @@ struct PlatformSettings : StaticConfig<PlatformSettings>
 
     static inline ConfigItem<std::string> LOG_PATH = createString("LogPath", "./log");
     static inline ConfigItem<std::string> DATA_PATH = createString("DataPath", "./data");
+
+    static inline ConfigItem<long> ADMIN_WEBSITE_PORT = createLong("AdminWebsitePort", 51234);
 };
 
 struct SessionSettings : Config<SessionSettings>
@@ -223,6 +225,9 @@ struct SessionSettings : Config<SessionSettings>
 
     static inline ConfigItem<bool> RESET_SEQ_NUM_ON_LOGON = createBool("ResetSeqNumOnLogon", false);
     static inline ConfigItem<bool> ALLOW_RESET_SEQ_NUM_FLAG = createBool("AllowResetSeqNumFlag", false);
+
+    static inline ConfigItem<bool> ENABLE_TCP_QUICKACK = createBool("TCPQuickAck", true);
+    static inline ConfigItem<bool> ENABLE_TCP_NODELAY = createBool("TCPNoDelay", true);
 
     static inline ConfigItem<std::string> FIX_DICTIONARY = createString("FIXDictionary");
 

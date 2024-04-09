@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <netinet/tcp.h>
 #include <openfix/Utils.h>
 #include <poll.h>
 #include <string.h>
@@ -52,10 +53,10 @@ bool try_make_non_blocking(int fd)
     return true;
 }
 
-bool set_sock_opt(int fd, int optname)
+bool set_sock_opt(int fd, int family, int optname, bool enable = true)
 {
-    int enable = 1;
-    if (setsockopt(fd, SOL_SOCKET, optname, &enable, sizeof(enable)) < 0) {
+    int enable_flag = enable ? 1 : 0;
+    if (setsockopt(fd, SOL_SOCKET, optname, &enable_flag, sizeof(enable_flag)) < 0) {
         LOG_ERROR("NetUtils", "Failed to set socket option " << optname << ": " << std::string(strerror(errno)));
     }
     return true;
@@ -242,7 +243,7 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
             return false;
         }
 
-        if (!set_sock_opt(fd, SO_REUSEADDR)) {
+        if (!set_sock_opt(fd, SOL_SOCKET, SO_REUSEADDR)) {
             ::close(fd);
             return false;
         }
@@ -538,6 +539,9 @@ void ReaderThread::process(int fd)
                     ::close(fd);
                     return;
                 }
+
+                // set socket settings
+                consumerIt->second->setSocketSettings(fd);
 
                 // create new connection
                 LOG_DEBUG("Associating fd=" << fd << " with session: " << cpty);
@@ -883,6 +887,12 @@ void NetworkHandler::stop()
     if (m_settings.getSessionType() == SessionType::ACCEPTOR) {
         m_network.removeAcceptor(m_settings);
     }
+}
+
+void NetworkHandler::setSocketSettings(int fd)
+{
+    set_sock_opt(fd, IPPROTO_TCP, TCP_NODELAY, m_settings.getBool(SessionSettings::ENABLE_TCP_NODELAY));
+    set_sock_opt(fd, IPPROTO_TCP, TCP_QUICKACK, m_settings.getBool(SessionSettings::ENABLE_TCP_QUICKACK));
 }
 
 void NetworkHandler::processMessage(const std::string& msg)

@@ -5,6 +5,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include "AdminWebsite.h"
 #include "FIXLogger.h"
 #include "FIXStore.h"
 #include "Network.h"
@@ -55,7 +56,11 @@ private:
 
     std::unordered_map<std::string, std::shared_ptr<Session>> m_sessionMap;
 
+    std::unique_ptr<AdminWebsite> m_adminWebsite;
+
     std::weak_ptr<ApplicationDelegate> m_delegate;
+
+    friend class AdminWebsite;
 
     CREATE_LOGGER("Application");
 };

@@ -69,6 +69,8 @@ public:
     void start();
     void stop();
 
+    void setSocketSettings(int fd);
+
     void processMessage(const std::string& msg);
     void send(MsgPacket&& msg);
 

@@ -4,7 +4,12 @@
 
 Application::Application()
     : Application(std::make_shared<FileLogger>(), std::make_shared<FileStore>())
-{}
+{
+    int websitePort = PlatformSettings::getLong(PlatformSettings::ADMIN_WEBSITE_PORT);
+    if (websitePort > 0) {
+        m_adminWebsite = std::make_unique<AdminWebsite>(*this, websitePort);
+    }
+}
 
 Application::Application(std::shared_ptr<IFIXLogger> logger, std::shared_ptr<IFIXStore> store)
     : m_logger(std::move(logger))
