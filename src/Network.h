@@ -141,7 +141,7 @@ public:
 
     bool hasAcceptor(const SessionID_T sessionID, int fd);
     void addAcceptor(const std::shared_ptr<NetworkHandler>& handler, const SessionID_T sessionID, int fd);
-    void removeAcceptor(const SessionID_T sessionID, int fd);
+    bool removeAcceptor(const SessionID_T sessionID, int fd);
 
     void stop();
 

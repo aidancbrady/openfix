@@ -301,10 +301,13 @@ bool Network::removeAcceptor(const SessionSettings& settings)
         return false;
     }
 
-    m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.getSessionID(), fd);
+    bool wasLastSession = m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.getSessionID(), fd);
 
-    // remove from port->fd map
-    m_acceptors.erase(port);
+    if (wasLastSession) {
+    	// remove from port->fd map
+    	m_acceptors.erase(port);
+        ::close(fd);
+    }
 
     return true;
 }
@@ -623,15 +626,18 @@ void ReaderThread::addAcceptor(const std::shared_ptr<NetworkHandler>& handler, c
     LOG_DEBUG("Created acceptor socket for " << sessionID << " with fd=" << fd);
 }
 
-void ReaderThread::removeAcceptor(const SessionID_T sessionID, int fd)
+bool ReaderThread::removeAcceptor(const SessionID_T sessionID, int fd)
 {
     std::lock_guard lock(m_mutex);
     auto it = m_acceptorSockets.find(fd);
     if (it == m_acceptorSockets.end())
-        return;
+        return true;
     it->second->m_sessions.erase(sessionID);
-    if (it->second->m_sessions.empty())
+    if (it->second->m_sessions.empty()) {
         m_acceptorSockets.erase(fd);
+        return true;
+    }
+    return false;
 }
 
 ////////////////////////////////////////////
