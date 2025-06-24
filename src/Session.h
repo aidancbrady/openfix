@@ -67,8 +67,23 @@ public:
     void setSenderSeqNum(int num);
     void setTargetSeqNum(int num);
 
-    int getSenderSeqNum();
-    int getTargetSeqNum();
+    int getSenderSeqNum() const;
+    int getTargetSeqNum() const;
+
+    bool isEnabled() const
+    {
+        return m_enabled.load(std::memory_order_acquire);
+    }
+
+    void setEnabled(bool enabled)
+    {
+        m_enabled.store(enabled, std::memory_order_release);
+    }
+
+    const std::shared_ptr<NetworkHandler>& getNetwork()
+    {
+        return m_network;
+    }
 
     void runUpdate();
 

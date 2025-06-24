@@ -8,3 +8,12 @@ bazel_dep(name = "spdlog", version = "1.13.0")
 bazel_dep(name = "onetbb", version = "2021.11.0")
 bazel_dep(name = "googletest", version = "1.14.0")
 bazel_dep(name = "pugixml", version = "1.14")
+bazel_dep(name = "rules_cc", version = "0.1.1")
+
+bazel_dep(name = "crowcpp", version = "1.0")
+git_override(
+    module_name = "crowcpp",
+    remote = "https://github.com/CrowCpp/Crow.git",
+    commit = "fc3a02307d2ae387561e4d43fe58b782cb63de2d"
+)
+

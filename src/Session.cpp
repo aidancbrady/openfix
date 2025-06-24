@@ -11,6 +11,7 @@ Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFI
     : m_settings(settings)
     , m_logger(logger->createLogger(settings))
     , m_state(SessionState::LOGON)
+    , m_enabled(true)
 {
     m_dictionary = DictionaryRegistry::instance().load(settings.getString(SessionSettings::FIX_DICTIONARY));
     m_cache = std::make_unique<MemoryCache>(settings, m_dictionary, store);
@@ -32,11 +33,13 @@ Session::~Session()
 
 void Session::start()
 {
+    m_enabled.store(true, std::memory_order_release);
     runUpdate();
 }
 
 void Session::stop()
 {
+    m_enabled.store(false, std::memory_order_release);
     m_network->stop();
 }
 
@@ -552,12 +555,12 @@ bool Session::validateSeqNum(const Message& msg)
     return false;
 }
 
-int Session::getSenderSeqNum()
+int Session::getSenderSeqNum() const
 {
     return m_cache->getSenderSeqNum();
 }
 
-int Session::getTargetSeqNum()
+int Session::getTargetSeqNum() const
 {
     return m_cache->getTargetSeqNum();
 }

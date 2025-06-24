@@ -340,7 +340,7 @@ void Network::run()
                 if (event_mask & EPOLLERR) {
                     int err = 0;
                     socklen_t len = sizeof(err);
-                    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0) {
+                    if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0) {
                         LOG_ERROR("EPOLLERR on fd=" << fd << ", error: " << strerror(err));
                     } else {
                         LOG_ERROR("EPOLLERR on fd=" << fd << ", and getsockopt failed to get error.");
@@ -385,8 +385,8 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     }
 
     char ip[INET_ADDRSTRLEN + 1];
-    if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) {
-        LOG_WARN("Failed to parse incoming connection IP address: " << ::strerror(errno));
+    if (::inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip)) == NULL) {
+        LOG_WARN("Failed to parse incoming connection IP address: " << strerror(errno));
         ::close(fd);
         return false;
     }

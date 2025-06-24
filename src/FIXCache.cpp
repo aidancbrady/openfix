@@ -33,13 +33,13 @@ void MemoryCache::reset()
     m_store.reset();
 }
 
-int MemoryCache::getSenderSeqNum()
+int MemoryCache::getSenderSeqNum() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     return m_senderSeqNum;
 }
 
-int MemoryCache::getTargetSeqNum()
+int MemoryCache::getTargetSeqNum() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     return m_targetSeqNum;
@@ -82,8 +82,9 @@ void MemoryCache::cache(int seqnum, const Message& msg)
     m_store.store(seqnum, msg.toString(true));
 }
 
-void MemoryCache::getMessages(int begin, int end, MessageConsumer consumer)
+void MemoryCache::getMessages(int begin, int end, MessageConsumer consumer) const
 {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = m_messages.lower_bound(begin);
     for (; it != m_messages.end() && (end == 0 || it->first <= end); ++it) {
         consumer(it->first, it->second);

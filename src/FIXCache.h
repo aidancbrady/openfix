@@ -15,13 +15,13 @@ public:
     virtual void cache(int seqnum, const Message& msg) = 0;
 
     using MessageConsumer = std::function<void(int, const Message&)>;
-    virtual void getMessages(int begin, int end, MessageConsumer consumer) = 0;
+    virtual void getMessages(int begin, int end, MessageConsumer consumer) const = 0;
 
     virtual void setSenderSeqNum(int num) = 0;
     virtual void setTargetSeqNum(int num) = 0;
 
-    virtual int getSenderSeqNum() = 0;
-    virtual int getTargetSeqNum() = 0;
+    virtual int getSenderSeqNum() const = 0;
+    virtual int getTargetSeqNum() const = 0;
 
     virtual int nextSenderSeqNum() = 0;
     virtual int nextTargetSeqNum() = 0;
@@ -39,13 +39,13 @@ public:
 
     void cache(int seqnum, const Message& msg) override;
 
-    void getMessages(int begin, int end, MessageConsumer consumer) override;
+    void getMessages(int begin, int end, MessageConsumer consumer) const override;
 
     void setSenderSeqNum(int num) override;
     void setTargetSeqNum(int num) override;
 
-    int getSenderSeqNum() override;
-    int getTargetSeqNum() override;
+    int getSenderSeqNum() const override;
+    int getTargetSeqNum() const override;
 
     int nextSenderSeqNum() override;
     int nextTargetSeqNum() override;
@@ -64,7 +64,7 @@ private:
 
     std::map<int, Message> m_messages;
 
-    std::recursive_mutex m_mutex;
+    mutable std::recursive_mutex m_mutex;
 
     std::map<int, Message> m_inboundQueue;
 
