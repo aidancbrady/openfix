@@ -301,7 +301,7 @@ bool Network::removeAcceptor(const SessionSettings& settings)
         return false;
     }
 
-    m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.getSessionID(), port);
+    m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.getSessionID(), fd);
 
     // remove from port->fd map
     m_acceptors.erase(port);
