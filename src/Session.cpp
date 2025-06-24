@@ -230,23 +230,31 @@ void Session::handleLogon(const Message& msg)
 
     int nextExpectedSeqNum = 0;
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
+    int expectedTargetSeqNum = m_cache->getTargetSeqNum();
+
     bool isPosDup = msg.getBody().tryGetBool(FIELD::PosDupFlag);
 
-    if (!isPosDup && seqNum < m_cache->getTargetSeqNum()) {
+    if (!isPosDup && seqNum < expectedTargetSeqNum) {
         logout("MsgSeqNum(34) too low, expected " + std::to_string(m_cache->getTargetSeqNum()), true);
         return;
     }
 
-    if (msg.getHeader().has(FIELD::NextExpectedMsgSeqNum)) {
-        nextExpectedSeqNum = std::stoi(msg.getHeader().getField(FIELD::NextExpectedMsgSeqNum));
+    bool needsMessageRecovery = false;
+    if (msg.getBody().has(FIELD::NextExpectedMsgSeqNum)) {
+        nextExpectedSeqNum = std::stoi(msg.getBody().getField(FIELD::NextExpectedMsgSeqNum));
         if (nextExpectedSeqNum > getSenderSeqNum()) {
             logout("NextExpectedMsgSeqNum(789) too high, next sender MsgSeqNum=" + std::to_string(getSenderSeqNum()), true);
             return;
         }
+
+        if (nextExpectedSeqNum < getSenderSeqNum()) {
+            LOG_INFO("Received NextExpectedMsgSeqNum=" << nextExpectedSeqNum << ", will run message recovery");
+            needsMessageRecovery = true;
+        }
     }
 
     bool shouldReset = false;
-    if (m_settings.getBool(SessionSettings::RESET_SEQ_NUM_ON_LOGON)) {
+    if (msg.getBody().tryGetBool(FIELD::ResetSeqNumFlag)) {
         if (!m_settings.getBool(SessionSettings::RESET_SEQ_NUM_ON_LOGON)) {
             logout("ResetSeqNumFlag(141) not supported on this session", true);
             return;
@@ -257,6 +265,9 @@ void Session::handleLogon(const Message& msg)
         shouldReset = true;
     }
 
+    if (seqNum == expectedTargetSeqNum)
+        m_cache->nextTargetSeqNum();
+
     if (m_settings.getSessionType() == SessionType::ACCEPTOR) {
         // set hbint, send a logon
         m_heartbeatInterval = std::stol(msg.getBody().getField(FIELD::HeartBtInt)) * 1000;
@@ -265,18 +276,18 @@ void Session::handleLogon(const Message& msg)
 
     m_state = SessionState::READY;
 
-    if (nextExpectedSeqNum > 0 && nextExpectedSeqNum < getSenderSeqNum()) {
+    if (needsMessageRecovery) {
         LOG_INFO("Received NextExpectedSeqNum=" << nextExpectedSeqNum << ", synchronizing to " << getSenderSeqNum());
         runMessageRecovery(nextExpectedSeqNum, 0);
     }
 
-    if (!m_settings.getBool(SessionSettings::SEND_NEXT_EXPECTED_MSG_SEQ_NUM) && seqNum > m_cache->getTargetSeqNum()) {
-        LOG_INFO("Incoming MsgSeqNum higher than expected, requesting resend from " << m_cache->getTargetSeqNum());
-        sendResendRequest(m_cache->getTargetSeqNum(), 0);
-        return;
+    if (!m_settings.getBool(SessionSettings::SEND_NEXT_EXPECTED_MSG_SEQ_NUM)) {
+        if (seqNum > expectedTargetSeqNum) {
+            LOG_INFO("Incoming MsgSeqNum higher than expected, requesting resend from " << expectedTargetSeqNum);
+            sendResendRequest(expectedTargetSeqNum, 0);
+            return;
+        }
     }
-
-    m_cache->nextTargetSeqNum();
 }
 
 void Session::runMessageRecovery(int beginSeqNo, int endSeqNo)

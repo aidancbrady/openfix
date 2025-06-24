@@ -23,7 +23,7 @@ int main(int argc, char** argv)
         settings.setString(SessionSettings::BEGIN_STRING, "FIX.4.2");
         settings.setString(SessionSettings::SENDER_COMP_ID, "ACCEPTOR");
         settings.setString(SessionSettings::TARGET_COMP_ID, "INITIATOR");
-        settings.setString(SessionSettings::FIX_DICTIONARY, "/home/aidancbrady/Documents/Projects/openfix/test/FIXDictionary.xml");
+        settings.setString(SessionSettings::FIX_DICTIONARY, "/home/aidancbrady/Projects/openfix/test/FIXDictionary.xml");
         settings.setLong(SessionSettings::ACCEPT_PORT, 12121);
 
         app.createSession("TEST_ACCEPTOR", settings);
@@ -33,7 +33,7 @@ int main(int argc, char** argv)
         settings.setString(SessionSettings::BEGIN_STRING, "FIX.4.2");
         settings.setString(SessionSettings::SENDER_COMP_ID, "INITIATOR");
         settings.setString(SessionSettings::TARGET_COMP_ID, "ACCEPTOR");
-        settings.setString(SessionSettings::FIX_DICTIONARY, "/home/aidancbrady/Documents/Projects/openfix/test/FIXDictionary.xml");
+        settings.setString(SessionSettings::FIX_DICTIONARY, "/home/aidancbrady/Projects/openfix/test/FIXDictionary.xml");
         settings.setLong(SessionSettings::CONNECT_PORT, 12121);
         settings.setString(SessionSettings::CONNECT_HOST, "localhost");
 
