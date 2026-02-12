@@ -96,9 +96,9 @@ public:
             else if (it->second.first == typeid(long))
                 m_longValues[it->second.second] = std::stol(val);
             else if (it->second.first == typeid(bool))
-                m_boolValues = val == "1" || strcasecmp(val.c_str(), "Y") == 0 || strcasecmp(val.c_str(), "true") == 0;
+                m_boolValues[it->second.second] = val == "1" || strcasecmp(val.c_str(), "Y") == 0 || strcasecmp(val.c_str(), "true") == 0;
             else if (it->second.first == typeid(double))
-                m_doubleValues = std::stod(val);
+                m_doubleValues[it->second.second] = std::stod(val);
         }
     }
 

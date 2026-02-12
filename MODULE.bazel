@@ -1,14 +1,9 @@
-###############################################################################
-# Bazel now uses Bzlmod by default to manage external dependencies.
-# Please consider migrating your external dependencies from WORKSPACE to MODULE.bazel.
-#
-# For more details, please check https://github.com/bazelbuild/bazel/issues/18958
-###############################################################################
 bazel_dep(name = "spdlog", version = "1.13.0")
 bazel_dep(name = "onetbb", version = "2021.11.0")
-bazel_dep(name = "googletest", version = "1.14.0")
+bazel_dep(name = "googletest", version = "1.17.0")
 bazel_dep(name = "pugixml", version = "1.14")
-bazel_dep(name = "rules_cc", version = "0.1.1")
+bazel_dep(name = "rules_cc", version = "0.2.14")
+bazel_dep(name = "rules_python", version = "1.8.0-rc1")
 
 bazel_dep(name = "crowcpp", version = "1.0")
 git_override(
@@ -17,3 +12,9 @@ git_override(
     commit = "fc3a02307d2ae387561e4d43fe58b782cb63de2d"
 )
 
+bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
+git_override(
+    module_name = "hedron_compile_commands",
+    commit = "f5fbd4cee671d8d908f37c83abaf70fba5928fc7",
+    remote = "https://github.com/mikael-s-persson/bazel-compile-commands-extractor",
+)
