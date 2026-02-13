@@ -10,6 +10,7 @@ cc_library(
     deps = [
         "//lib:openfix-lib",
         "@pugixml//:pugixml",
-        "@crowcpp//:crow"
+        "@crowcpp//:crow",
+        "@boringssl//:ssl",
     ]
 )

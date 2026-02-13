@@ -12,6 +12,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <sys/types.h>
 
 #include "Config.h"
 
@@ -20,6 +21,8 @@
 
 class Network;
 class ReaderThread;
+typedef struct ssl_ctx_st SSL_CTX;
+typedef struct ssl_st SSL;
 
 using SendCallback_T = std::function<void()>;
 struct MsgPacket
@@ -39,6 +42,7 @@ public:
 
     void send(MsgPacket&& msg);
     void disconnect();
+    bool isReady() const;
 
     size_t getFD()
     {
@@ -77,6 +81,10 @@ public:
     void disconnect();
     void setConnection(std::shared_ptr<ConnectionHandle> connection);
     bool isConnected();
+    const SessionSettings& getSettings() const
+    {
+        return m_settings;
+    }
 
     void invalidate();
 
@@ -102,6 +110,10 @@ struct Acceptor
 class ReadBuffer
 {
 public:
+    ReadBuffer(Network& network)
+        : m_network(network)
+    {}
+
     std::vector<std::string> read(int fd);
 
     void clear(int fd)
@@ -116,6 +128,7 @@ public:
 
 private:
     std::unordered_map<int, std::string> m_bufferMap;
+    Network& m_network;
 
     CREATE_LOGGER("ReadBuffer");
 };
@@ -125,6 +138,7 @@ class ReaderThread
 public:
     ReaderThread(Network& network)
         : m_running(true)
+        , m_buffer(network)
         , m_network(network)
     {
         m_thread = std::thread([&] { process(); });
@@ -251,14 +265,38 @@ public:
     bool addAcceptor(const SessionSettings& settings, const std::shared_ptr<NetworkHandler>& handler);
     bool removeAcceptor(const SessionSettings& settings);
 
+    bool progressConnection(int fd);
+    bool isConnectionReady(int fd) const;
+    bool requiresConnectionProgress(int fd) const;
+    ssize_t readConnection(int fd, void* buf, size_t len);
+    ssize_t writeConnection(int fd, const void* buf, size_t len);
+    void removeConnection(int fd);
+
 private:
+    struct TLSConnection
+    {
+        std::shared_ptr<SSL_CTX> m_ctx;
+        SSL* m_ssl = nullptr;
+        bool m_serverMode = false;
+        bool m_ready = false;
+        std::mutex m_mutex;
+    };
+
     void run();
 
     bool accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor);
+    bool createTLSConnection(int fd, const SessionSettings& settings, bool serverMode, const std::string& serverName);
+    std::shared_ptr<SSL_CTX> getTLSContext(const SessionSettings& settings, bool serverMode);
+    std::shared_ptr<SSL_CTX> createTLSContext(const SessionSettings& settings, bool serverMode) const;
+    std::string getTLSContextKey(const SessionSettings& settings, bool serverMode) const;
 
     // acceptor port -> fd
     std::mutex m_mutex;
     std::unordered_map<int, int> m_acceptors;
+    mutable std::mutex m_tlsMutex;
+    std::unordered_map<int, std::shared_ptr<TLSConnection>> m_tlsConnections;
+    std::unordered_map<std::string, std::shared_ptr<SSL_CTX>> m_tlsContexts;
+    std::atomic<bool> m_hasTLSConnections = false;
 
     int m_epollFD;
 

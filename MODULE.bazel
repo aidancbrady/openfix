@@ -6,6 +6,7 @@ bazel_dep(name = "rules_cc", version = "0.2.14")
 bazel_dep(name = "rules_python", version = "1.8.0-rc1")
 
 bazel_dep(name = "crowcpp", version = "1.0")
+bazel_dep(name = "boringssl", version = "0.20240930.0")
 git_override(
     module_name = "crowcpp",
     remote = "https://github.com/CrowCpp/Crow.git",

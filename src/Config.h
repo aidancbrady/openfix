@@ -242,6 +242,13 @@ struct SessionSettings : Config<SessionSettings>
 
     static inline ConfigItem<std::string> CONNECT_HOST = createString("ConnectHost");
     static inline ConfigItem<long> CONNECT_PORT = createLong("ConnectPort");
+    static inline ConfigItem<bool> TLS_ENABLED = createBool("TLSEnabled", false);
+    static inline ConfigItem<bool> TLS_VERIFY_PEER = createBool("TLSVerifyPeer", true);
+    static inline ConfigItem<bool> TLS_REQUIRE_CLIENT_CERT = createBool("TLSRequireClientCert", false);
+    static inline ConfigItem<std::string> TLS_CA_FILE = createString("TLSCAFile");
+    static inline ConfigItem<std::string> TLS_CERT_FILE = createString("TLSCertFile");
+    static inline ConfigItem<std::string> TLS_KEY_FILE = createString("TLSKeyFile");
+    static inline ConfigItem<std::string> TLS_SERVER_NAME = createString("TLSServerName");
 
     static inline ConfigItem<long> CONNECT_TIMEOUT = createLong("ConnectTimeout", 5000L);
 

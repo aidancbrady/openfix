@@ -4,6 +4,8 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <openfix/Utils.h>
 #include <poll.h>
 #include <string.h>
@@ -14,6 +16,7 @@
 
 #include <cerrno>
 #include <iostream>
+#include <sstream>
 
 #include "Exception.h"
 #include "Fields.h"
@@ -33,6 +36,11 @@ Network::Network()
     : m_epollFD(-1)
     , m_running(false)
 {
+    static const int init_result = OPENSSL_init_ssl(0, nullptr);
+    if (init_result != 1) {
+        throw std::runtime_error("Failed to initialize OpenSSL");
+    }
+
     m_writerThreadCount = PlatformSettings::getLong(PlatformSettings::WRITER_THREADS);
     m_readerThreadCount = PlatformSettings::getLong(PlatformSettings::READER_THREADS);
 }
@@ -56,10 +64,26 @@ bool try_make_non_blocking(int fd)
 bool set_sock_opt(int fd, int family, int optname, bool enable = true)
 {
     int enable_flag = enable ? 1 : 0;
-    if (setsockopt(fd, SOL_SOCKET, optname, &enable_flag, sizeof(enable_flag)) < 0) {
+    if (setsockopt(fd, family, optname, &enable_flag, sizeof(enable_flag)) < 0) {
         LOG_ERROR("NetUtils", "Failed to set socket option " << optname << ": " << std::string(strerror(errno)));
+        return false;
     }
     return true;
+}
+
+bool is_tls_enabled(const SessionSettings& settings)
+{
+    return settings.getBool(SessionSettings::TLS_ENABLED);
+}
+
+std::string get_ssl_error()
+{
+    unsigned long err = ERR_get_error();
+    if (err == 0)
+        return "unknown SSL error";
+    char buf[256];
+    ERR_error_string_n(err, buf, sizeof(buf));
+    return std::string(buf);
 }
 
 void Network::start()
@@ -112,6 +136,18 @@ void Network::stop()
 
     m_thread.join();
 
+    {
+        std::lock_guard lock(m_tlsMutex);
+        for (auto& [_, conn] : m_tlsConnections) {
+            std::lock_guard connLock(conn->m_mutex);
+            if (conn->m_ssl)
+                SSL_free(conn->m_ssl);
+        }
+        m_tlsConnections.clear();
+        m_tlsContexts.clear();
+        m_hasTLSConnections.store(false, std::memory_order_release);
+    }
+
     // finally, close epoll FD
     close(m_epollFD);
 
@@ -159,7 +195,10 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
         }
 
         int res = ::connect(fd, addr->ai_addr, addr->ai_addrlen);
-        if (res < 0 && errno == EINPROGRESS) {
+        if (res == 0) {
+            connected = true;
+            break;
+        } else if (res < 0 && errno == EINPROGRESS) {
             struct pollfd pfd;
             memset(&pfd, 0, sizeof(pfd));
             pfd.fd = fd;
@@ -191,7 +230,20 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
     ::freeaddrinfo(ret);
 
     if (connected) {
+        handler->setSocketSettings(fd);
+
+        if (is_tls_enabled(settings)) {
+            std::string tlsServerName = settings.getString(SessionSettings::TLS_SERVER_NAME);
+            if (tlsServerName.empty())
+                tlsServerName = hostname;
+            if (!createTLSConnection(fd, settings, false, tlsServerName)) {
+                close(fd);
+                return false;
+            }
+        }
+
         if (!m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd)) {
+            removeConnection(fd);
             close(fd);
             return false;
         }
@@ -202,6 +254,7 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
 
         if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
             LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
+            removeConnection(fd);
             close(fd);
             return false;
         }
@@ -360,6 +413,9 @@ void Network::run()
 
                     // ready to write
                     m_writerThreads[fd % m_writerThreadCount]->notify();
+
+                    if (requiresConnectionProgress(fd))
+                        m_readerThreads[fd % m_readerThreadCount]->queue(fd);
                 }
                 if (event_mask & (EPOLLRDHUP | EPOLLHUP)) {
                     LOG_INFO("disconnect callback for fd=" << fd);
@@ -379,7 +435,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     int fd = ::accept(server_fd, reinterpret_cast<struct sockaddr*>(&addr), &addrlen);
     if (fd < 0) {
         LOG_WARN("Failed to accept new socket: " << strerror(errno));
-        return -1;
+        return false;
     }
 
     if (!try_make_non_blocking(fd)) {
@@ -396,12 +452,21 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
 
     std::string address = std::string(ip) + ":" + std::to_string(::ntohs(addr.sin_port));
 
+    if (!acceptor->m_sessions.empty()) {
+        const SessionSettings& settings = acceptor->m_sessions.begin()->second->getSettings();
+        if (is_tls_enabled(settings) && !createTLSConnection(fd, settings, true, "")) {
+            ::close(fd);
+            return false;
+        }
+    }
+
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLOUT | EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
     event.data.fd = fd;
 
     if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
         LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
+        removeConnection(fd);
         ::close(fd);
         return false;
     }
@@ -410,6 +475,318 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
     m_readerThreads[fd % m_readerThreads.size()]->accept(fd, acceptor);
 
     return true;
+}
+
+bool Network::createTLSConnection(int fd, const SessionSettings& settings, bool serverMode, const std::string& serverName)
+{
+    auto ctx = getTLSContext(settings, serverMode);
+    if (!ctx)
+        return false;
+
+    std::shared_ptr<TLSConnection> conn = std::make_shared<TLSConnection>();
+    conn->m_ctx = std::move(ctx);
+    conn->m_serverMode = serverMode;
+    conn->m_ssl = SSL_new(conn->m_ctx.get());
+    if (!conn->m_ssl) {
+        LOG_ERROR("Failed to create SSL object for fd=" << fd << ": " << get_ssl_error());
+        return false;
+    }
+
+    if (SSL_set_fd(conn->m_ssl, fd) != 1) {
+        LOG_ERROR("Failed to attach SSL object to fd=" << fd << ": " << get_ssl_error());
+        SSL_free(conn->m_ssl);
+        conn->m_ssl = nullptr;
+        return false;
+    }
+
+    if (serverMode) {
+        SSL_set_accept_state(conn->m_ssl);
+    } else {
+        SSL_set_connect_state(conn->m_ssl);
+        if (!serverName.empty()) {
+            SSL_set_tlsext_host_name(conn->m_ssl, serverName.c_str());
+        }
+
+        if (settings.getBool(SessionSettings::TLS_VERIFY_PEER) && !serverName.empty()) {
+            X509_VERIFY_PARAM* verifyParams = SSL_get0_param(conn->m_ssl);
+            if (!verifyParams) {
+                LOG_ERROR("Failed to acquire TLS verify params for fd=" << fd);
+                SSL_free(conn->m_ssl);
+                conn->m_ssl = nullptr;
+                return false;
+            }
+
+            bool verifyTargetSet = false;
+            if (X509_VERIFY_PARAM_set1_ip_asc(verifyParams, serverName.c_str()) == 1)
+                verifyTargetSet = true;
+            else if (SSL_set1_host(conn->m_ssl, serverName.c_str()) == 1)
+                verifyTargetSet = true;
+
+            if (!verifyTargetSet) {
+                LOG_ERROR("Failed to set TLS hostname verification target for fd=" << fd);
+                SSL_free(conn->m_ssl);
+                conn->m_ssl = nullptr;
+                return false;
+            }
+        }
+    }
+
+    std::lock_guard lock(m_tlsMutex);
+    m_tlsConnections[fd] = std::move(conn);
+    m_hasTLSConnections.store(true, std::memory_order_release);
+    return true;
+}
+
+std::string Network::getTLSContextKey(const SessionSettings& settings, bool serverMode) const
+{
+    std::stringstream ss;
+    ss << (serverMode ? "S:" : "C:") << settings.getSessionID() << ':'
+       << settings.getString(SessionSettings::TLS_CA_FILE) << ':'
+       << settings.getString(SessionSettings::TLS_CERT_FILE) << ':'
+       << settings.getString(SessionSettings::TLS_KEY_FILE) << ':'
+       << settings.getBool(SessionSettings::TLS_VERIFY_PEER) << ':'
+       << settings.getBool(SessionSettings::TLS_REQUIRE_CLIENT_CERT);
+    return ss.str();
+}
+
+std::shared_ptr<SSL_CTX> Network::getTLSContext(const SessionSettings& settings, bool serverMode)
+{
+    const std::string key = getTLSContextKey(settings, serverMode);
+    std::lock_guard lock(m_tlsMutex);
+    auto it = m_tlsContexts.find(key);
+    if (it != m_tlsContexts.end())
+        return it->second;
+
+    auto ctx = createTLSContext(settings, serverMode);
+    if (ctx)
+        m_tlsContexts[key] = ctx;
+    return ctx;
+}
+
+std::shared_ptr<SSL_CTX> Network::createTLSContext(const SessionSettings& settings, bool serverMode) const
+{
+    SSL_CTX* rawCtx = SSL_CTX_new(TLS_method());
+    if (!rawCtx) {
+        LOG_ERROR("Failed to create SSL_CTX: " << get_ssl_error());
+        return nullptr;
+    }
+
+    std::shared_ptr<SSL_CTX> ctx(rawCtx, [](SSL_CTX* c) {
+        if (c)
+            SSL_CTX_free(c);
+    });
+
+    SSL_CTX_set_min_proto_version(rawCtx, TLS1_2_VERSION);
+    SSL_CTX_set_mode(rawCtx, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS);
+    SSL_CTX_set_options(rawCtx, SSL_OP_NO_COMPRESSION);
+
+    const std::string caFile = settings.getString(SessionSettings::TLS_CA_FILE);
+    const std::string certFile = settings.getString(SessionSettings::TLS_CERT_FILE);
+    const std::string keyFile = settings.getString(SessionSettings::TLS_KEY_FILE);
+    const bool verifyPeer = settings.getBool(SessionSettings::TLS_VERIFY_PEER);
+    const bool requireClientCert = settings.getBool(SessionSettings::TLS_REQUIRE_CLIENT_CERT);
+
+    if (!caFile.empty()) {
+        if (SSL_CTX_load_verify_locations(rawCtx, caFile.c_str(), nullptr) != 1) {
+            LOG_ERROR("Failed to load TLS CA file: " << caFile << " (" << get_ssl_error() << ")");
+            return nullptr;
+        }
+    } else if (verifyPeer || requireClientCert) {
+        if (SSL_CTX_set_default_verify_paths(rawCtx) != 1) {
+            LOG_ERROR("Failed to load default TLS trust store: " << get_ssl_error());
+            return nullptr;
+        }
+    }
+
+    if (!certFile.empty()) {
+        if (SSL_CTX_use_certificate_file(rawCtx, certFile.c_str(), SSL_FILETYPE_PEM) != 1) {
+            LOG_ERROR("Failed to load TLS certificate file: " << certFile << " (" << get_ssl_error() << ")");
+            return nullptr;
+        }
+    }
+
+    if (!keyFile.empty()) {
+        if (SSL_CTX_use_PrivateKey_file(rawCtx, keyFile.c_str(), SSL_FILETYPE_PEM) != 1) {
+            LOG_ERROR("Failed to load TLS private key file: " << keyFile << " (" << get_ssl_error() << ")");
+            return nullptr;
+        }
+    }
+
+    if (!certFile.empty() || !keyFile.empty()) {
+        if (SSL_CTX_check_private_key(rawCtx) != 1) {
+            LOG_ERROR("TLS certificate/private key mismatch: " << get_ssl_error());
+            return nullptr;
+        }
+    }
+
+    if (serverMode && (certFile.empty() || keyFile.empty())) {
+        LOG_ERROR("TLS acceptor mode requires both TLSCertFile and TLSKeyFile");
+        return nullptr;
+    }
+
+    if (serverMode) {
+        if (requireClientCert) {
+            SSL_CTX_set_verify(rawCtx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
+        } else if (verifyPeer) {
+            SSL_CTX_set_verify(rawCtx, SSL_VERIFY_PEER, nullptr);
+        } else {
+            SSL_CTX_set_verify(rawCtx, SSL_VERIFY_NONE, nullptr);
+        }
+    } else {
+        SSL_CTX_set_verify(rawCtx, verifyPeer ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
+    }
+
+    return ctx;
+}
+
+bool Network::progressConnection(int fd)
+{
+    if (!m_hasTLSConnections.load(std::memory_order_acquire))
+        return true;
+
+    std::shared_ptr<TLSConnection> conn;
+    {
+        std::lock_guard lock(m_tlsMutex);
+        auto it = m_tlsConnections.find(fd);
+        if (it == m_tlsConnections.end())
+            return true;
+        conn = it->second;
+    }
+
+    std::lock_guard connLock(conn->m_mutex);
+    if (conn->m_ready)
+        return true;
+
+    int ret = conn->m_serverMode ? SSL_accept(conn->m_ssl) : SSL_connect(conn->m_ssl);
+    if (ret == 1) {
+        conn->m_ready = true;
+        LOG_INFO("TLS handshake complete for fd=" << fd << ", version=" << SSL_get_version(conn->m_ssl) << ", cipher=" << SSL_get_cipher(conn->m_ssl));
+        return true;
+    }
+
+    int sslErr = SSL_get_error(conn->m_ssl, ret);
+    if (sslErr == SSL_ERROR_WANT_READ || sslErr == SSL_ERROR_WANT_WRITE)
+        return true;
+
+    LOG_ERROR("TLS handshake failed on fd=" << fd << ": " << get_ssl_error());
+    return false;
+}
+
+bool Network::isConnectionReady(int fd) const
+{
+    if (!m_hasTLSConnections.load(std::memory_order_acquire))
+        return true;
+
+    std::lock_guard lock(m_tlsMutex);
+    auto it = m_tlsConnections.find(fd);
+    if (it == m_tlsConnections.end())
+        return true;
+    std::lock_guard connLock(it->second->m_mutex);
+    return it->second->m_ready;
+}
+
+bool Network::requiresConnectionProgress(int fd) const
+{
+    if (!m_hasTLSConnections.load(std::memory_order_acquire))
+        return false;
+
+    std::lock_guard lock(m_tlsMutex);
+    auto it = m_tlsConnections.find(fd);
+    if (it == m_tlsConnections.end())
+        return false;
+    std::lock_guard connLock(it->second->m_mutex);
+    return !it->second->m_ready;
+}
+
+ssize_t Network::readConnection(int fd, void* buf, size_t len)
+{
+    if (!m_hasTLSConnections.load(std::memory_order_acquire))
+        return ::recv(fd, buf, len, 0);
+
+    std::shared_ptr<TLSConnection> conn;
+    {
+        std::lock_guard lock(m_tlsMutex);
+        auto it = m_tlsConnections.find(fd);
+        if (it == m_tlsConnections.end())
+            return ::recv(fd, buf, len, 0);
+        conn = it->second;
+    }
+
+    std::lock_guard connLock(conn->m_mutex);
+    if (!conn->m_ready) {
+        errno = EAGAIN;
+        return -1;
+    }
+
+    int ret = SSL_read(conn->m_ssl, buf, static_cast<int>(len));
+    if (ret > 0)
+        return ret;
+
+    int sslErr = SSL_get_error(conn->m_ssl, ret);
+    if (sslErr == SSL_ERROR_WANT_READ || sslErr == SSL_ERROR_WANT_WRITE) {
+        errno = EAGAIN;
+        return -1;
+    }
+    if (sslErr == SSL_ERROR_ZERO_RETURN)
+        return 0;
+
+    LOG_ERROR("TLS read failed on fd=" << fd << ": " << get_ssl_error());
+    return 0;
+}
+
+ssize_t Network::writeConnection(int fd, const void* buf, size_t len)
+{
+    if (!m_hasTLSConnections.load(std::memory_order_acquire))
+        return ::send(fd, buf, len, MSG_NOSIGNAL);
+
+    std::shared_ptr<TLSConnection> conn;
+    {
+        std::lock_guard lock(m_tlsMutex);
+        auto it = m_tlsConnections.find(fd);
+        if (it == m_tlsConnections.end())
+            return ::send(fd, buf, len, MSG_NOSIGNAL);
+        conn = it->second;
+    }
+
+    std::lock_guard connLock(conn->m_mutex);
+    if (!conn->m_ready) {
+        errno = EAGAIN;
+        return -1;
+    }
+
+    int ret = SSL_write(conn->m_ssl, buf, static_cast<int>(len));
+    if (ret > 0)
+        return ret;
+
+    int sslErr = SSL_get_error(conn->m_ssl, ret);
+    if (sslErr == SSL_ERROR_WANT_READ || sslErr == SSL_ERROR_WANT_WRITE) {
+        errno = EAGAIN;
+        return -1;
+    }
+
+    LOG_ERROR("TLS write failed on fd=" << fd << ": " << get_ssl_error());
+    errno = ECONNRESET;
+    return -1;
+}
+
+void Network::removeConnection(int fd)
+{
+    std::shared_ptr<TLSConnection> conn;
+    {
+        std::lock_guard lock(m_tlsMutex);
+        auto it = m_tlsConnections.find(fd);
+        if (it == m_tlsConnections.end())
+            return;
+        conn = it->second;
+        m_tlsConnections.erase(it);
+        if (m_tlsConnections.empty())
+            m_hasTLSConnections.store(false, std::memory_order_release);
+    }
+
+    std::lock_guard connLock(conn->m_mutex);
+    if (conn->m_ssl)
+        SSL_free(conn->m_ssl);
+    conn->m_ssl = nullptr;
 }
 
 ////////////////////////////////////////////
@@ -433,6 +810,7 @@ void ReaderThread::disconnect(int fd)
     std::lock_guard lock(m_mutex);
     // immediately close the socket
     ::close(fd);
+    m_network.removeConnection(fd);
     m_buffer.clear(fd);
     auto it = m_connections.find(fd);
     if (m_connections.find(fd) != m_connections.end()) {
@@ -475,6 +853,11 @@ void ReaderThread::process(int fd)
 {
     // lock here as we're touching connection maps
     std::lock_guard lock(m_mutex);
+
+    if (!m_network.progressConnection(fd)) {
+        disconnect(fd);
+        return;
+    }
 
     // known connections
     {
@@ -579,16 +962,20 @@ void ReaderThread::stop()
     // close open connections
     for (const auto& [k, conn] : m_connections) {
         ::close(k);
+        m_network.removeConnection(k);
         // proper cleanup - maybe improve this in the future
         conn->invalidate();
     }
     // close unknown connections
-    for (const auto& [k, _] : m_unknownConnections)
+    for (const auto& [k, _] : m_unknownConnections) {
         ::close(k);
+        m_network.removeConnection(k);
+    }
     // close acceptor sockets
     for (const auto& [k, _] : m_acceptorSockets) {
         LOG_DEBUG("Closing acceptor socket, fd=" << k);
         ::close(k);
+        m_network.removeConnection(k);
     }
 
     m_connections.clear();
@@ -656,7 +1043,7 @@ std::vector<std::string> ReadBuffer::read(int fd)
     char read_buffer[READ_BUF_SIZE];
 
     int bytes = 0;
-    while ((bytes = ::recv(fd, read_buffer, sizeof(read_buffer), 0)) > 0) {
+    while ((bytes = m_network.readConnection(fd, read_buffer, sizeof(read_buffer))) > 0) {
         buffer.append(read_buffer, bytes);
 
         // parse all the messages we can
@@ -767,7 +1154,7 @@ void WriterThread::process()
 
             size_t sent = 0;
             while (sent < buffer.m_buffer.length()) {
-                ssize_t ret = ::send(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent, MSG_NOSIGNAL);
+                ssize_t ret = m_network.writeConnection(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent);
                 if (ret < 0) {
                     if (errno != EAGAIN && errno != EWOULDBLOCK) {
                         LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
@@ -855,6 +1242,11 @@ void ConnectionHandle::disconnect()
 void ConnectionHandle::send(MsgPacket&& msg)
 {
     m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->send(m_fd, std::move(msg));
+}
+
+bool ConnectionHandle::isReady() const
+{
+    return m_network.isConnectionReady(m_fd);
 }
 
 ////////////////////////////////////////////
@@ -950,5 +1342,5 @@ bool NetworkHandler::isConnected()
         m_connection = nullptr;
         return false;
     }
-    return m_connection != nullptr;
+    return m_connection != nullptr && m_connection->isReady();
 }
