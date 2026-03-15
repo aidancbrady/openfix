@@ -109,7 +109,7 @@ inline std::string buildRawMessage(const std::string& beginString,
     std::string prefix = "8=" + beginString + "\x01" "9=" + std::to_string(body.size()) + "\x01";
     std::string full = prefix + body;
     uint8_t checksum = computeChecksum(full);
-    return full + "10=" + formatChecksum(checksum) + "\x01";
+    return full + "10=" + std::string(formatChecksum(checksum).view()) + "\x01";
 }
 
 // Build a FIX message with an explicit (possibly invalid) checksum.
@@ -137,7 +137,7 @@ inline std::string buildRawMessageBadBodyLength(const std::string& beginString,
     std::string prefix = "8=" + beginString + "\x01" "9=" + std::to_string(bodyLengthOverride) + "\x01";
     std::string full = prefix + body;
     uint8_t checksum = computeChecksum(full);
-    return full + "10=" + formatChecksum(checksum) + "\x01";
+    return full + "10=" + std::string(formatChecksum(checksum).view()) + "\x01";
 }
 
 // ---- Raw FIX Client ----

@@ -140,10 +140,13 @@ TEST_F(SessionMessageTest, SendingTimeOutsideThresholdTriggersReject)
 
     RawFIXClient client;
     ASSERT_TRUE(client.connectWithRetry(port_));
-    ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 1));
+    // Use a long heartbeat interval so the logout timeout (2*hbint) gives the
+    // writer thread plenty of time to flush both the reject and logout messages
+    // before the session terminates the connection.
+    ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
     auto session = app.getSession("acceptor");
-    ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
+    ASSERT_TRUE(waitFor([&] { return session->getState() == SessionState::READY; }, std::chrono::seconds(3)));
 
     auto msg = buildRawMessage("FIX.4.2", {
         {35, "0"},

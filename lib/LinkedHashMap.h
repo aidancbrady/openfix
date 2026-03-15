@@ -4,11 +4,8 @@
 #include <utility>
 #include <vector>
 
-// Insertion-ordered map backed by a flat std::vector.
-// Optimized for small N (typical FIX messages have ~15 fields):
-//   - Cache-friendly contiguous storage
-//   - Zero per-element heap allocations
-//   - Linear scan for find() beats hash lookup when N < ~32
+// insertion-ordered map backed by a flat std::vector
+// optimized for small N (typical FIX messages have ~15 fields)
 template <typename K, typename V>
 class LinkedHashMap
 {

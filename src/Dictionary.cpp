@@ -345,12 +345,12 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     if (!relaxedParsing) {
         // verify bodylength
         auto expectedLength = text.size() - bodyLengthStart - 7;
-        try {
-            auto bodyLength = static_cast<unsigned long>(std::stol(ret.getHeader().getField(FIELD::BodyLength).c_str()));
-            if (expectedLength != bodyLength)
-                throw std::exception();
-        } catch (...) {
-            TRY_LOG_THROW("Invalid BodyLength: expected " << expectedLength);
+        {
+            const auto& blStr = ret.getHeader().getField(FIELD::BodyLength);
+            unsigned long bodyLength = 0;
+            auto [ptr, ec] = std::from_chars(blStr.data(), blStr.data() + blStr.size(), bodyLength);
+            if (ec != std::errc{} || expectedLength != bodyLength)
+                TRY_LOG_THROW("Invalid BodyLength: expected " << expectedLength);
         }
 
         // verify checksum (SIMD-accelerated for large messages)
@@ -364,8 +364,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 TRY_LOG_THROW("Message didn't end in checksum");
             const auto& checksumRet = ret.getTrailer().getField(FIELD::CheckSum);
 
-            if (checksumRet != checksumStr) {
-                TRY_LOG_THROW("Invalid checksum: expected " << checksumStr << ", received " << checksumRet);
+            if (checksumRet != checksumStr.view()) {
+                TRY_LOG_THROW("Invalid checksum: expected " << checksumStr.view() << ", received " << checksumRet);
             }
         }
     }

@@ -59,7 +59,7 @@ private:
 class NetworkHandler : public std::enable_shared_from_this<NetworkHandler>
 {
 public:
-    using MessageCallback_T = std::function<void(const std::string&)>;
+    using MessageCallback_T = std::function<void(std::string)>;
 
     NetworkHandler(const SessionSettings& settings, Network& network, MessageCallback_T callback)
         : m_settings(settings)
@@ -75,7 +75,7 @@ public:
 
     void setSocketSettings(int fd);
 
-    void processMessage(const std::string& msg);
+    void processMessage(std::string msg);
     void send(MsgPacket&& msg);
 
     void disconnect();

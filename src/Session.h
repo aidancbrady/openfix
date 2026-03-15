@@ -105,7 +105,7 @@ private:
     void internal_send(const Message& msg, SendCallback_T callback);
 
 private:
-    void onMessage(const std::string& msg);
+    void onMessage(std::string msg);
     void processMessage(const Message& msg, long time);
 
     bool validateMessage(const Message& msg, long time);

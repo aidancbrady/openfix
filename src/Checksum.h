@@ -48,13 +48,20 @@ inline uint8_t computeChecksum(std::string_view sv)
     return computeChecksum(sv.data(), sv.size());
 }
 
-inline std::string formatChecksum(uint8_t checksum)
+struct ChecksumStr
 {
-    // format checksum as a zero-padded 3-digit string
-    char buf[4];
-    buf[0] = '0' + (checksum / 100);
-    buf[1] = '0' + (checksum / 10 % 10);
-    buf[2] = '0' + (checksum % 10);
-    buf[3] = '\0';
-    return std::string(buf, 3);
+    char buf[3];
+
+    std::string_view view() const { return std::string_view(buf, 3); }
+    const char* data() const { return buf; }
+    size_t size() const { return 3; }
+};
+
+inline ChecksumStr formatChecksum(uint8_t checksum)
+{
+    ChecksumStr result;
+    result.buf[0] = '0' + (checksum / 100);
+    result.buf[1] = '0' + (checksum / 10 % 10);
+    result.buf[2] = '0' + (checksum % 10);
+    return result;
 }

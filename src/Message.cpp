@@ -105,7 +105,7 @@ std::string Message::serialize(char soh_char) const
 
     appendInt(result, FIELD::CheckSum);
     result += TAG_ASSIGNMENT_CHAR;
-    result += checksumStr;
+    result.append(checksumStr.data(), checksumStr.size());
     result += soh_char;
 
     return result;

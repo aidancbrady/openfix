@@ -863,8 +863,8 @@ void ReaderThread::process(int fd)
             LOG_TRACE("Handling data for known connection on fd=" << fd);
 
             auto msgs = m_buffer.read(fd);
-            for (const auto& msg : msgs)
-                it->second->processMessage(msg);
+            for (auto& msg : msgs)
+                it->second->processMessage(std::move(msg));
 
             return;
         }
@@ -930,8 +930,8 @@ void ReaderThread::process(int fd)
                 LOG_DEBUG("Associating fd=" << fd << " with session: " << cpty);
                 addConnection(consumerIt->second, fd);
 
-                for (const auto& msg : msgs)
-                    consumerIt->second->processMessage(msg);
+                for (auto& msg : msgs)
+                    consumerIt->second->processMessage(std::move(msg));
             }
 
             return;
@@ -1291,9 +1291,9 @@ void NetworkHandler::setSocketSettings(int fd)
     set_sock_opt(fd, IPPROTO_TCP, TCP_QUICKACK, m_settings.getBool(SessionSettings::ENABLE_TCP_QUICKACK));
 }
 
-void NetworkHandler::processMessage(const std::string& msg)
+void NetworkHandler::processMessage(std::string msg)
 {
-    m_callback(msg);
+    m_callback(std::move(msg));
 }
 
 void NetworkHandler::send(MsgPacket&& msg)

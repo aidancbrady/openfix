@@ -3,6 +3,7 @@
 #include <openfix/LinkedHashMap.h>
 #include <openfix/Types.h>
 
+#include <charconv>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -80,17 +81,21 @@ struct GroupSpec
 class FieldMap
 {
 public:
-    std::string getField(int tag) const
+    const std::string& getField(int tag) const
     {
         auto fit = m_fields.find(tag);
         if (fit != m_fields.end())
             return fit->second;
 
-        auto git = m_groups.find(tag);
-        if (git != m_groups.end())
-            return std::to_string(git->second.size());
-
         throw FieldNotFound(tag);
+    }
+
+    int getIntField(int tag) const
+    {
+        const auto& str = getField(tag);
+        int val = 0;
+        std::from_chars(str.data(), str.data() + str.size(), val);
+        return val;
     }
 
     bool tryGetBool(int tag) const
@@ -107,6 +112,13 @@ public:
     }
 
     void setField(int tag, std::string value, bool order = true);
+
+    void setField(int tag, int value, bool order = true)
+    {
+        char buf[12];
+        auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), value);
+        setField(tag, std::string(buf, ptr - buf), order);
+    }
 
     const auto& getFields() const
     {
