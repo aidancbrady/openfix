@@ -2,6 +2,7 @@
 
 #include <strings.h>
 
+#include <charconv>
 #include <functional>
 #include <list>
 
@@ -71,8 +72,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     MessageState msgState = MessageState::HEADER;
     ParserState state = ParserState::START;
 
-    std::string key;
-    std::string value;
+    size_t key_start = 0;
+    size_t value_start = 0;
 
     std::vector<ParserGroupInfo> groupStack;
     // start with header
@@ -128,25 +129,25 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 continue;
             }
 
-            auto setField = [&](FieldMap& fieldMap, int tag, std::string val) {
+            auto setField = [&](FieldMap& fieldMap, int tag, std::string_view val) {
                 if (getFieldType(tag) == FieldType::LENGTH) {
-                    try {
-                        dataLength = static_cast<size_t>(std::stoi(val.c_str()));
-                    } catch (...) {
+                    int parsed = 0;
+                    auto [ptr, ec] = std::from_chars(val.data(), val.data() + val.size(), parsed);
+                    if (ec != std::errc{} || ptr != val.data() + val.size())
                         TRY_LOG_THROW("Couldn't parse data field (tag=" << tag << ")");
-                    }
+                    else
+                        dataLength = parsed;
                 }
 
                 if (tag == FIELD::BodyLength)
                     bodyLengthStart = i + 1;
                 // don't order, we batch order fields after parsing is done
-                fieldMap.setField(tag, std::move(val), false);
-
-                key.clear();
-                value.clear();
+                fieldMap.setField(tag, std::string(val), false);
 
                 state = ParserState::NEXT;
             };
+
+            std::string_view val(text.data() + value_start, i - value_start);
 
             auto handleRepeatingTag = [&](ParserGroupInfo& group, int groupIdx) {
                 // we've already seen this tag; are we in a group?
@@ -160,7 +161,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
                     // create a duplicate group with this tag
                     auto& newGroup = groupStack[groupIdx - 1].m_group.get().addGroup(group.m_groupTag);
-                    setField(newGroup, tag, value);
+                    setField(newGroup, tag, val);
                     // replace current group on stack with new gruop
                     group.m_group = std::ref(newGroup);
                     ++group.m_groupCount;
@@ -178,7 +179,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                     if (group.m_group.get().has(tag))
                         return handleRepeatingTag(group, groupIdx);
 
-                    setField(group.m_group.get(), tag, value);
+                    setField(group.m_group.get(), tag, val);
                     return groupIdx;
                 }
 
@@ -194,15 +195,16 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                     newGroup.m_groupTag = tag;
                     newGroup.m_groupCount = 1;
 
-                    try {
-                        newGroup.m_groupMaxCount = std::stoi(value.c_str());
-                    } catch (...) {
+                    int parsed = 0;
+                    auto [ptr, ec] = std::from_chars(val.data(), val.data() + val.size(), parsed);
+                    if (ec != std::errc{} || ptr != val.data() + val.size()) {
                         TRY_LOG_THROW("Couldn't parse NumInGroup (tag=" << tag << ")");
                         return -1;
                     }
+                    newGroup.m_groupMaxCount = parsed;
 
                     groupStack.push_back(std::move(newGroup));
-                    setField(group.m_group.get(), tag, value);
+                    setField(group.m_group.get(), tag, val);
                     return groupIdx + 1;
                 }
 
@@ -263,7 +265,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
             // unknown field, all attempts failed; we assume it's in the current group
             TRY_LOG_ERROR("Unknown field (tag=" << tag << ")");
-            setField(curGroup(), tag, value);
+            setField(curGroup(), tag, val);
 
             continue;
         } else if (c == TAG_ASSIGNMENT_CHAR) {
@@ -278,12 +280,14 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             }
 
             state = ParserState::VAL;
+            value_start = i + 1;
 
-            try {
-                tag = std::stoi(key.c_str());
-            } catch (...) {
-                TRY_LOG_THROW("Tag not int (tag=" << tag << ")");
-                fail = true;
+            {
+                auto [ptr, ec] = std::from_chars(text.data() + key_start, text.data() + i, tag);
+                if (ec != std::errc{} || ptr != text.data() + i) {
+                    TRY_LOG_THROW("Tag not int (tag=" << tag << ")");
+                    fail = true;
+                }
             }
 
             if (tagCount == 0 && tag != FIELD::BeginString)
@@ -300,9 +304,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 if (getFieldType(tag) == FieldType::DATA) {
                     if (i + dataLength >= text.size())
                         TRY_LOG_THROW("Data tag length would exceed message size");
-                    for (size_t j = 0; j < static_cast<size_t>(dataLength); ++j)
-                        value += text[i + j + 1];
-                    curGroup().setField(tag, value);
+                    std::string_view data_val(text.data() + i + 1, static_cast<size_t>(dataLength));
+                    curGroup().setField(tag, std::string(data_val), false);
                     i += dataLength;
                 }
 
@@ -320,10 +323,9 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
         }
 
         if (state != ParserState::VAL) {
+            if (state != ParserState::KEY)
+                key_start = i;
             state = ParserState::KEY;
-            key += c;
-        } else {
-            value += c;
         }
     }
 
