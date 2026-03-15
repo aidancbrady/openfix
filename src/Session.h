@@ -59,7 +59,7 @@ public:
         m_cache = std::move(cache);
     }
 
-    const SessionSettings& getSettings()
+    const SessionSettings& getSettings() const
     {
         return m_settings;
     }
@@ -83,6 +83,11 @@ public:
     const std::shared_ptr<NetworkHandler>& getNetwork()
     {
         return m_network;
+    }
+
+    SessionState getState() const
+    {
+        return m_state;
     }
 
     void runUpdate();
