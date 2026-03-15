@@ -5,6 +5,7 @@
 #include <functional>
 #include <list>
 
+#include "Checksum.h"
 #include "Fields.h"
 #include "pugixml.hpp"
 
@@ -80,7 +81,6 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
     auto curGroup = [&]() -> FieldMap& { return groupStack[groupStack.size() - 1].m_group.get(); };
     auto curSpec = [&]() -> const GroupSpec& { return *groupStack[groupStack.size() - 1].m_spec; };
 
-    int checksum = 0;
     int tag = 0;
     int bodyLengthStart = 0;
     int dataLength = -1;
@@ -114,8 +114,6 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
         if (i == text.size() - 1 && c != INTERNAL_SOH_CHAR)
             TRY_LOG_THROW("Message does not end in SOH character");
 
-        if (i < text.size() - 7)
-            checksum += c;
         if (c == INTERNAL_SOH_CHAR) {
             // beginning SOH char
             if (state == ParserState::START) {
@@ -350,14 +348,12 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             TRY_LOG_THROW("Invalid BodyLength: expected " << expectedLength);
         }
 
-        // verify checksum
+        // verify checksum (SIMD-accelerated for large messages)
         if (!ret.getTrailer().has(FIELD::CheckSum)) {
             TRY_LOG_THROW("Footer missing CheckSum");
         } else {
-            checksum %= 256;
-            std::string checksumStr = std::to_string(checksum);
-            while (checksumStr.size() < 3)
-                checksumStr = '0' + checksumStr;
+            // checksum covers everything except the trailing "10=XXX\x01" (7 bytes)
+            auto checksumStr = formatChecksum(computeChecksum(text.data(), text.size() - 7));
 
             if (tag != FIELD::CheckSum)
                 TRY_LOG_THROW("Message didn't end in checksum");

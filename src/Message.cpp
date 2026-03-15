@@ -3,6 +3,7 @@
 #include <functional>
 #include <unordered_set>
 
+#include "Checksum.h"
 #include "Fields.h"
 
 const std::unordered_set<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
@@ -63,17 +64,11 @@ void Message::toStream(std::ostream& ostr, char soh_char) const
     ret << FIELD::BodyLength << TAG_ASSIGNMENT_CHAR << body.size() << soh_char;
     ret << body;
     body = ret.str();
-    // get checksum
-    int checksum = 0;
-    for (char c : body)
-        checksum += c;
+    // get checksum (SIMD-accelerated for large messages)
+    uint8_t checksum = computeChecksum(body);
     if (soh_char != INTERNAL_SOH_CHAR)
-        checksum += soh_char_count * (INTERNAL_SOH_CHAR - soh_char);
-    checksum %= 256;
-
-    auto checksumStr = std::to_string(checksum);
-    while (checksumStr.size() < 3)
-        checksumStr = '0' + checksumStr;
+        checksum += static_cast<uint8_t>(soh_char_count * (INTERNAL_SOH_CHAR - soh_char));
+    auto checksumStr = formatChecksum(checksum);
 
     ostr << body;
     ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << checksumStr << soh_char;
