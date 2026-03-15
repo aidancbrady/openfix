@@ -547,7 +547,7 @@ std::string Network::getTLSContextKey(const SessionSettings& settings, bool serv
 std::shared_ptr<SSL_CTX> Network::getTLSContext(const SessionSettings& settings, bool serverMode)
 {
     const std::string key = getTLSContextKey(settings, serverMode);
-    std::lock_guard lock(m_tlsMutex);
+    std::lock_guard lock(m_tlsContextsMutex);
     auto it = m_tlsContexts.find(key);
     if (it != m_tlsContexts.end())
         return it->second;
@@ -641,7 +641,7 @@ bool Network::progressConnection(int fd)
 
     std::shared_ptr<TLSConnection> conn;
     {
-        std::lock_guard lock(m_tlsMutex);
+        std::shared_lock lock(m_tlsMutex);
         auto it = m_tlsConnections.find(fd);
         if (it == m_tlsConnections.end())
             return true;
@@ -649,12 +649,12 @@ bool Network::progressConnection(int fd)
     }
 
     std::lock_guard connLock(conn->m_mutex);
-    if (conn->m_ready)
+    if (conn->m_ready.load(std::memory_order_acquire))
         return true;
 
     int ret = conn->m_serverMode ? SSL_accept(conn->m_ssl) : SSL_connect(conn->m_ssl);
     if (ret == 1) {
-        conn->m_ready = true;
+        conn->m_ready.store(true, std::memory_order_release);
         LOG_INFO("TLS handshake complete for fd=" << fd << ", version=" << SSL_get_version(conn->m_ssl) << ", cipher=" << SSL_get_cipher(conn->m_ssl));
         return true;
     }
@@ -672,12 +672,11 @@ bool Network::isConnectionReady(int fd) const
     if (!m_hasTLSConnections.load(std::memory_order_acquire))
         return true;
 
-    std::lock_guard lock(m_tlsMutex);
+    std::shared_lock lock(m_tlsMutex);
     auto it = m_tlsConnections.find(fd);
     if (it == m_tlsConnections.end())
         return true;
-    std::lock_guard connLock(it->second->m_mutex);
-    return it->second->m_ready;
+    return it->second->m_ready.load(std::memory_order_acquire);
 }
 
 bool Network::requiresConnectionProgress(int fd) const
@@ -685,12 +684,11 @@ bool Network::requiresConnectionProgress(int fd) const
     if (!m_hasTLSConnections.load(std::memory_order_acquire))
         return false;
 
-    std::lock_guard lock(m_tlsMutex);
+    std::shared_lock lock(m_tlsMutex);
     auto it = m_tlsConnections.find(fd);
     if (it == m_tlsConnections.end())
         return false;
-    std::lock_guard connLock(it->second->m_mutex);
-    return !it->second->m_ready;
+    return !it->second->m_ready.load(std::memory_order_acquire);
 }
 
 ssize_t Network::readConnection(int fd, void* buf, size_t len)
@@ -700,18 +698,19 @@ ssize_t Network::readConnection(int fd, void* buf, size_t len)
 
     std::shared_ptr<TLSConnection> conn;
     {
-        std::lock_guard lock(m_tlsMutex);
+        std::shared_lock lock(m_tlsMutex);
         auto it = m_tlsConnections.find(fd);
         if (it == m_tlsConnections.end())
             return ::recv(fd, buf, len, 0);
         conn = it->second;
     }
 
-    std::lock_guard connLock(conn->m_mutex);
-    if (!conn->m_ready) {
+    if (!conn->m_ready.load(std::memory_order_acquire)) {
         errno = EAGAIN;
         return -1;
     }
+
+    std::lock_guard connLock(conn->m_mutex);
 
     int ret = SSL_read(conn->m_ssl, buf, static_cast<int>(len));
     if (ret > 0)
@@ -736,18 +735,19 @@ ssize_t Network::writeConnection(int fd, const void* buf, size_t len)
 
     std::shared_ptr<TLSConnection> conn;
     {
-        std::lock_guard lock(m_tlsMutex);
+        std::shared_lock lock(m_tlsMutex);
         auto it = m_tlsConnections.find(fd);
         if (it == m_tlsConnections.end())
             return ::send(fd, buf, len, MSG_NOSIGNAL);
         conn = it->second;
     }
 
-    std::lock_guard connLock(conn->m_mutex);
-    if (!conn->m_ready) {
+    if (!conn->m_ready.load(std::memory_order_acquire)) {
         errno = EAGAIN;
         return -1;
     }
+
+    std::lock_guard connLock(conn->m_mutex);
 
     int ret = SSL_write(conn->m_ssl, buf, static_cast<int>(len));
     if (ret > 0)

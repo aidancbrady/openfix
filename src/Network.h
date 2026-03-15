@@ -8,6 +8,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -278,7 +279,7 @@ private:
         std::shared_ptr<SSL_CTX> m_ctx;
         SSL* m_ssl = nullptr;
         bool m_serverMode = false;
-        bool m_ready = false;
+        std::atomic<bool> m_ready = false;
         std::mutex m_mutex;
     };
 
@@ -293,8 +294,9 @@ private:
     // acceptor port -> fd
     std::mutex m_mutex;
     std::unordered_map<int, int> m_acceptors;
-    mutable std::mutex m_tlsMutex;
+    mutable std::shared_mutex m_tlsMutex;
     std::unordered_map<int, std::shared_ptr<TLSConnection>> m_tlsConnections;
+    std::mutex m_tlsContextsMutex;
     std::unordered_map<std::string, std::shared_ptr<SSL_CTX>> m_tlsContexts;
     std::atomic<bool> m_hasTLSConnections = false;
 
