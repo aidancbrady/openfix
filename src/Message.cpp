@@ -1,5 +1,6 @@
 #include "Message.h"
 
+#include <charconv>
 #include <functional>
 #include <unordered_set>
 
@@ -8,77 +9,112 @@
 
 const std::unordered_set<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
 
-std::string printGroup(const FieldMap& fieldMap, bool skipIgnoredTags, char soh_char, int& soh_char_count)
+static void appendInt(std::string& out, int val)
 {
-    std::ostringstream ostr;
+    char buf[12];
+    auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), val);
+    out.append(buf, ptr - buf);
+}
 
+static void appendGroup(std::string& out, const FieldMap& fieldMap, bool skipIgnoredTags, char soh_char, int& soh_char_count)
+{
     if (!fieldMap.empty()) {
         for (const auto& [k, v] : fieldMap.getFields()) {
-            // skip ignored tags
             if (skipIgnoredTags && IGNORED_TAGS.find(k) != IGNORED_TAGS.end())
                 continue;
 
-            ostr << k << TAG_ASSIGNMENT_CHAR << v << soh_char;
+            appendInt(out, k);
+            out += TAG_ASSIGNMENT_CHAR;
+            out += v;
+            out += soh_char;
             ++soh_char_count;
 
             if (fieldMap.getGroupCount(k) > 0)
                 for (const auto& group : fieldMap.getGroups(k))
-                    ostr << printGroup(group, skipIgnoredTags, soh_char, soh_char_count);
+                    appendGroup(out, group, skipIgnoredTags, soh_char, soh_char_count);
         }
 
-        if (!skipIgnoredTags && fieldMap.has(FIELD::CheckSum))
-            ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << fieldMap.getField(FIELD::CheckSum) << soh_char;
+        if (!skipIgnoredTags && fieldMap.has(FIELD::CheckSum)) {
+            appendInt(out, FIELD::CheckSum);
+            out += TAG_ASSIGNMENT_CHAR;
+            out += fieldMap.getField(FIELD::CheckSum);
+            out += soh_char;
+        }
     }
-
-    return ostr.str();
 }
 
 std::ostream& operator<<(std::ostream& ostr, const FieldMap& fieldMap)
 {
+    std::string out;
     int tmp = 0;
-    ostr << printGroup(fieldMap, false, EXTERNAL_SOH_CHAR, tmp);
+    appendGroup(out, fieldMap, false, EXTERNAL_SOH_CHAR, tmp);
+    ostr << out;
     return ostr;
 }
 
 std::ostream& operator<<(std::ostream& ostr, const Message& msg)
 {
-    std::ostringstream ret;
     msg.toStream(ostr);
     return ostr;
 }
 
 void Message::toStream(std::ostream& ostr, char soh_char) const
 {
-    std::ostringstream ret;
+    ostr << serialize(soh_char);
+}
+
+std::string Message::serialize(char soh_char) const
+{
+    std::string prefix;
+    prefix.reserve(32);
     int soh_char_count = 1;  // at least 1 from tag 9
     auto it = m_header.getFields().find(FIELD::BeginString);
     if (it != m_header.getFields().end()) {
-        ret << FIELD::BeginString << TAG_ASSIGNMENT_CHAR << it->second << soh_char;
+        appendInt(prefix, FIELD::BeginString);
+        prefix += TAG_ASSIGNMENT_CHAR;
+        prefix += it->second;
+        prefix += soh_char;
         ++soh_char_count;
     }
 
     std::string body;
-    body += printGroup(m_header, true, soh_char, soh_char_count);
-    body += printGroup(m_body, true, soh_char, soh_char_count);
-    body += printGroup(m_trailer, true, soh_char, soh_char_count);
-    ret << FIELD::BodyLength << TAG_ASSIGNMENT_CHAR << body.size() << soh_char;
-    ret << body;
-    body = ret.str();
+    body.reserve(256);
+    appendGroup(body, m_header, true, soh_char, soh_char_count);
+    appendGroup(body, m_body, true, soh_char, soh_char_count);
+    appendGroup(body, m_trailer, true, soh_char, soh_char_count);
+
+    // build BodyLength tag
+    std::string bodyLenTag;
+    bodyLenTag.reserve(16);
+    appendInt(bodyLenTag, FIELD::BodyLength);
+    bodyLenTag += TAG_ASSIGNMENT_CHAR;
+    appendInt(bodyLenTag, static_cast<int>(body.size()));
+    bodyLenTag += soh_char;
+
+    // assemble: prefix + bodyLength + body
+    std::string result;
+    result.reserve(prefix.size() + bodyLenTag.size() + body.size() + 16);
+    result += prefix;
+    result += bodyLenTag;
+    result += body;
+
     // get checksum (SIMD-accelerated for large messages)
-    uint8_t checksum = computeChecksum(body);
+    uint8_t checksum = computeChecksum(result);
     if (soh_char != INTERNAL_SOH_CHAR)
         checksum += static_cast<uint8_t>(soh_char_count * (INTERNAL_SOH_CHAR - soh_char));
     auto checksumStr = formatChecksum(checksum);
 
-    ostr << body;
-    ostr << FIELD::CheckSum << TAG_ASSIGNMENT_CHAR << checksumStr << soh_char;
+    appendInt(result, FIELD::CheckSum);
+    result += TAG_ASSIGNMENT_CHAR;
+    result += checksumStr;
+    result += soh_char;
+
+    return result;
 }
 
 std::string Message::toString(bool internal) const
 {
-    std::ostringstream ostr;
-    toStream(ostr, internal ? INTERNAL_SOH_CHAR : EXTERNAL_SOH_CHAR);
-    return ostr.str();
+    return serialize(internal ? INTERNAL_SOH_CHAR : EXTERNAL_SOH_CHAR);
 }
 
 void FieldMap::setField(int tag, std::string value, bool order)

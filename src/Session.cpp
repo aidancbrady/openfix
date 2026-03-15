@@ -1,5 +1,6 @@
 #include "Session.h"
 
+#include <algorithm>
 #include <openfix/Utils.h>
 #include <strings.h>
 
@@ -141,10 +142,15 @@ void Session::send(Message& msg, SendCallback_T callback)
 void Session::internal_send(const Message& msg, SendCallback_T callback)
 {
     if (m_network->isConnected()) {
-        auto msg_str = msg.toString();
-        LOG_DEBUG("Sending: " << msg_str);
-        m_logger.logMessage(msg_str, Direction::OUTBOUND);
-        m_network->send({msg.toString(true), callback});
+        auto internal_str = msg.toString(true);
+
+        // convert internal SOH to external for logging (cheap char replace)
+        auto log_str = internal_str;
+        std::replace(log_str.begin(), log_str.end(), INTERNAL_SOH_CHAR, EXTERNAL_SOH_CHAR);
+        LOG_DEBUG("Sending: " << log_str);
+        m_logger.logMessage(std::move(log_str), Direction::OUTBOUND);
+
+        m_network->send({std::move(internal_str), callback});
 
         // update our heartbeat monitor as we just sent data
         m_lastSentHeartbeat = Utils::getEpochMillis();

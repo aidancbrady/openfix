@@ -26,11 +26,12 @@
 #define ACCEPTOR_BACKLOG 16
 
 const std::string BEGIN_STRING_TAG = std::to_string(FIELD::BeginString) + TAG_ASSIGNMENT_CHAR;
-const std::string BODY_LENGTH_TAG = std::to_string(FIELD::BodyLength);
-const std::string SENDER_COMP_ID_TAG = std::to_string(FIELD::SenderCompID);
-const std::string TARGET_COMP_ID_TAG = std::to_string(FIELD::TargetCompID);
-const std::string SENDER_SUB_ID_TAG = std::to_string(FIELD::SenderSubID);
-const std::string CHECKSUM_TAG = std::to_string(FIELD::CheckSum);
+
+// pre-built search patterns: SOH + tag + '=' (avoids per-call string allocation in getTagValue)
+const std::string BODY_LENGTH_PATTERN = Utils::buildTagPattern(FIELD::BodyLength);
+const std::string SENDER_COMP_ID_PATTERN = Utils::buildTagPattern(FIELD::SenderCompID);
+const std::string TARGET_COMP_ID_PATTERN = Utils::buildTagPattern(FIELD::TargetCompID);
+const std::string CHECKSUM_PATTERN = Utils::buildTagPattern(FIELD::CheckSum);
 
 Network::Network()
     : m_epollFD(-1)
@@ -120,6 +121,9 @@ void Network::stop()
 
     m_running.store(false, std::memory_order_release);
 
+    // join the epoll thread first so it stops dispatching to reader/writer threads
+    m_thread.join();
+
     // wait for all threads to timeout and terminate
     for (auto& thread : m_readerThreads)
         thread->stop();
@@ -133,8 +137,6 @@ void Network::stop()
 
     m_readerThreads.clear();
     m_writerThreads.clear();
-
-    m_thread.join();
 
     {
         std::lock_guard lock(m_tlsMutex);
@@ -891,14 +893,14 @@ void ReaderThread::process(int fd)
                 m_unknownConnections.erase(fd);
                 const auto& msg = msgs[0];
 
-                auto sender_comp = Utils::getTagValue(msg, SENDER_COMP_ID_TAG);
+                auto sender_comp = Utils::getTagValue(msg, SENDER_COMP_ID_PATTERN, SENDER_COMP_ID_PATTERN.size(), 0);
                 if (sender_comp.first.empty()) {
                     LOG_ERROR("Received message without SenderCompID");
                     ::close(fd);
                     return;
                 }
 
-                auto target_comp = Utils::getTagValue(msg, TARGET_COMP_ID_TAG, sender_comp.second);
+                auto target_comp = Utils::getTagValue(msg, TARGET_COMP_ID_PATTERN, TARGET_COMP_ID_PATTERN.size(), sender_comp.second);
                 if (target_comp.first.empty()) {
                     LOG_ERROR("Received message without TargetCompID");
                     ::close(fd);
@@ -1041,24 +1043,21 @@ std::vector<std::string> ReadBuffer::read(int fd)
     while ((bytes = m_network.readConnection(fd, read_buffer, sizeof(read_buffer))) > 0) {
         buffer.append(read_buffer, bytes);
 
-        // parse all the messages we can
-        size_t ptr = 0;
+        // parse all the messages we can, tracking consumed bytes via offset
+        size_t consumed = 0;
         while (true) {
-            ptr = 0;
-
             // find beginning of message
-            ptr = buffer.find(BEGIN_STRING_TAG, ptr);
+            size_t ptr = buffer.find(BEGIN_STRING_TAG, consumed);
             if (ptr == std::string::npos)
                 break;
 
-            if (ptr > 0) {
-                LOG_WARN("Discarding text received in buffer: " << buffer.substr(0, ptr));
-                buffer.erase(0, ptr);
-                ptr = 0;
+            if (ptr > consumed) {
+                LOG_WARN("Discarding text received in buffer: " << buffer.substr(consumed, ptr - consumed));
+                consumed = ptr;
             }
 
             // find start of bodylength tag
-            auto tag_it = Utils::getTagValue(buffer, BODY_LENGTH_TAG, ptr);
+            auto tag_it = Utils::getTagValue(buffer, BODY_LENGTH_PATTERN, BODY_LENGTH_PATTERN.size(), ptr);
             if (tag_it.first.empty())
                 break;
             ptr = tag_it.second;
@@ -1069,22 +1068,26 @@ std::vector<std::string> ReadBuffer::read(int fd)
                     throw std::runtime_error("Negative body length");
                 ptr += bodyLength;
             } catch (...) {
-                LOG_WARN("Unable to parse message, bad body length: " << buffer);
-                // corrupted message, move up the buffer and hopefully splice it next round
-                buffer.erase(0, ptr + 1);
+                LOG_WARN("Unable to parse message, bad body length: " << buffer.substr(consumed, ptr + 1 - consumed));
+                // corrupted message, skip past it and try the next one
+                consumed = ptr + 1;
                 continue;
             }
 
             // find the checksum
-            tag_it = Utils::getTagValue(buffer, CHECKSUM_TAG, ptr);
+            tag_it = Utils::getTagValue(buffer, CHECKSUM_PATTERN, CHECKSUM_PATTERN.size(), ptr);
             if (tag_it.first.empty())
                 break;
             ptr = tag_it.second;
 
             // completed message!
-            ret.push_back(buffer.substr(0, ptr + 1));
-            buffer.erase(0, ptr + 1);
+            ret.push_back(buffer.substr(consumed, ptr + 1 - consumed));
+            consumed = ptr + 1;
         }
+
+        // compact buffer once after extracting all messages
+        if (consumed > 0)
+            buffer.erase(0, consumed);
     }
 
     if (bytes <= 0) {

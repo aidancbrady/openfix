@@ -246,6 +246,7 @@ public:
 
 private:
     void toStream(std::ostream& ostr, char soh_char = EXTERNAL_SOH_CHAR) const;
+    std::string serialize(char soh_char) const;
 
     FieldMap m_header;
     FieldMap m_trailer;

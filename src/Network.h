@@ -17,8 +17,8 @@
 
 #include "Config.h"
 
-#define READ_BUF_SIZE 1024
-#define WRITE_BUF_SIZE 1024
+#define READ_BUF_SIZE 8192
+#define WRITE_BUF_SIZE 8192
 
 class Network;
 class ReaderThread;

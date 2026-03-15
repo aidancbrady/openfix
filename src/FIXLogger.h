@@ -49,7 +49,7 @@ public:
 
     void logMessage(const std::string& msg, Direction dir)
     {
-        auto time = Utils::getUTCTimestamp();
+        auto time = Utils::getUTCTimestampMicros();
         m_msgLogger(time + " " + (dir == Direction::INBOUND ? "RECV: " : "SENT: ") + msg + "\n");
     }
 

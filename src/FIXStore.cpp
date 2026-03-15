@@ -1,13 +1,11 @@
 #include "FIXStore.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 
 #include "Exception.h"
-
-#define READ_BUF 1024
 
 enum class WriteType : uint8_t
 {
@@ -42,29 +40,34 @@ StoreHandle FileStore::createStore(const SessionSettings& settings)
 
 void StoreHandle::store(int seqnum, const std::string& msg)
 {
-    std::ostringstream ostr;
-    ostr << static_cast<char>(WriteType::MSG);
-    ostr.write(reinterpret_cast<char*>(&seqnum), sizeof(seqnum));
+    // header: type(1) + seqnum(4) + length(8) = 13 bytes
+    char hdr[1 + sizeof(seqnum) + sizeof(size_t)];
+    hdr[0] = static_cast<char>(WriteType::MSG);
+    std::memcpy(hdr + 1, &seqnum, sizeof(seqnum));
     size_t len = msg.length();
-    ostr.write(reinterpret_cast<char*>(&len), sizeof(len));
-    ostr << msg;
-    m_writer.write(ostr.str());
+    std::memcpy(hdr + 1 + sizeof(seqnum), &len, sizeof(len));
+
+    std::string buf;
+    buf.reserve(sizeof(hdr) + msg.size());
+    buf.append(hdr, sizeof(hdr));
+    buf.append(msg);
+    m_writer.write(std::move(buf));
 }
 
 void StoreHandle::setSenderSeqNum(int num)
 {
-    std::ostringstream ostr;
-    ostr << static_cast<char>(WriteType::SENDER_SEQ_NUM);
-    ostr.write(reinterpret_cast<char*>(&num), sizeof(num));
-    m_writer.write(ostr.str());
+    char buf[1 + sizeof(num)];
+    buf[0] = static_cast<char>(WriteType::SENDER_SEQ_NUM);
+    std::memcpy(buf + 1, &num, sizeof(num));
+    m_writer.write(std::string(buf, sizeof(buf)));
 }
 
 void StoreHandle::setTargetSeqNum(int num)
 {
-    std::ostringstream ostr;
-    ostr << static_cast<char>(WriteType::TARGET_SEQ_NUM);
-    ostr.write(reinterpret_cast<char*>(&num), sizeof(num));
-    m_writer.write(ostr.str());
+    char buf[1 + sizeof(num)];
+    buf[0] = static_cast<char>(WriteType::TARGET_SEQ_NUM);
+    std::memcpy(buf + 1, &num, sizeof(num));
+    m_writer.write(std::string(buf, sizeof(buf)));
 }
 
 SessionData StoreHandle::load()
@@ -78,8 +81,6 @@ SessionData StoreHandle::load()
 
     LOG_INFO("Loading session state from store file: " << m_path);
     std::ifstream storeFile(m_path, std::ios::binary);
-
-    char buf[READ_BUF];
 
     size_t cnt = 0;
     while (true) {
@@ -98,8 +99,6 @@ SessionData StoreHandle::load()
             if (type == WriteType::TARGET_SEQ_NUM)
                 ret.m_targetSeqNum = seqNum;
         } else if (type == WriteType::MSG) {
-            std::ostringstream msg;
-
             // first read seqnum
             int seqNum;
             if (!storeFile.read(reinterpret_cast<char*>(&seqNum), sizeof(seqNum)))
@@ -110,17 +109,17 @@ SessionData StoreHandle::load()
             if (!storeFile.read(reinterpret_cast<char*>(&length), sizeof(length)))
                 throw FileStoreLoadError("Data file corrupted; unable to parse message length");
 
-            // now read msg
+            // read msg directly into a pre-sized string
+            std::string msg(length, '\0');
             size_t read = 0;
             while (read < length) {
-                int toRead = length - read;
-                if (!storeFile.read(buf, std::min(READ_BUF, toRead)))
+                size_t toRead = length - read;
+                if (!storeFile.read(msg.data() + read, toRead))
                     throw FileStoreLoadError("Data file corrupted; unable to read complete message");
                 read += toRead;
-                msg.write(buf, toRead);
             }
 
-            ret.m_messages[seqNum] = msg.str();
+            ret.m_messages[seqNum] = std::move(msg);
             ++cnt;
         }
     }
