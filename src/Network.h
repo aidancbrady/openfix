@@ -1,7 +1,7 @@
 #pragma once
 
-#include <oneapi/tbb/concurrent_queue.h>
 #include <openfix/Log.h>
+#include <openfix/Types.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -11,7 +11,6 @@
 #include <shared_mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 #include <sys/types.h>
 
@@ -105,7 +104,7 @@ private:
 struct Acceptor
 {
     // sessionID -> session network handler
-    std::unordered_map<SessionID_T, std::shared_ptr<NetworkHandler>> m_sessions;
+    HashMapT<SessionID_T, std::shared_ptr<NetworkHandler>> m_sessions;
 };
 
 class ReadBuffer
@@ -128,7 +127,7 @@ public:
     }
 
 private:
-    std::unordered_map<int, std::string> m_bufferMap;
+    HashMapT<int, std::string> m_bufferMap;
     Network& m_network;
 
     CREATE_LOGGER("ReadBuffer");
@@ -171,16 +170,16 @@ private:
     std::condition_variable_any m_cv;
     std::thread m_thread;
 
-    tbb::concurrent_queue<int> m_readyFDs;
+    LockFreeQueueT<int> m_readyFDs;
 
     ReadBuffer m_buffer;
 
     // fd -> acceptor
-    std::unordered_map<int, std::shared_ptr<Acceptor>> m_acceptorSockets;
+    HashMapT<int, std::shared_ptr<Acceptor>> m_acceptorSockets;
     // fd -> unassigned connection from acceptor socket
-    std::unordered_map<int, std::shared_ptr<Acceptor>> m_unknownConnections;
+    HashMapT<int, std::shared_ptr<Acceptor>> m_unknownConnections;
     // fd -> assigned connection
-    std::unordered_map<int, std::shared_ptr<NetworkHandler>> m_connections;
+    HashMapT<int, std::shared_ptr<NetworkHandler>> m_connections;
 
     Network& m_network;
 
@@ -193,6 +192,24 @@ struct WriteBuffer
     {
         m_queue.reserve(WRITE_BUF_SIZE);
         m_buffer.reserve(WRITE_BUF_SIZE);
+    }
+
+    WriteBuffer(WriteBuffer&& other) noexcept
+        : m_queue(std::move(other.m_queue))
+        , m_buffer(std::move(other.m_buffer))
+        , m_meta_queue(std::move(other.m_meta_queue))
+        , m_meta_buffer(std::move(other.m_meta_buffer))
+        , m_valid(other.m_valid.load(std::memory_order_relaxed))
+    {}
+
+    WriteBuffer& operator=(WriteBuffer&& other) noexcept
+    {
+        m_queue = std::move(other.m_queue);
+        m_buffer = std::move(other.m_buffer);
+        m_meta_queue = std::move(other.m_meta_queue);
+        m_meta_buffer = std::move(other.m_meta_buffer);
+        m_valid.store(other.m_valid.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        return *this;
     }
 
     struct MsgMetadata
@@ -245,7 +262,7 @@ private:
     std::condition_variable_any m_cv;
     std::thread m_thread;
 
-    std::unordered_map<int, WriteBuffer> m_bufferMap;
+    HashMapT<int, WriteBuffer> m_bufferMap;
 
     Network& m_network;
 
@@ -293,11 +310,11 @@ private:
 
     // acceptor port -> fd
     std::mutex m_mutex;
-    std::unordered_map<int, int> m_acceptors;
+    HashMapT<int, int> m_acceptors;
     mutable std::shared_mutex m_tlsMutex;
-    std::unordered_map<int, std::shared_ptr<TLSConnection>> m_tlsConnections;
+    HashMapT<int, std::shared_ptr<TLSConnection>> m_tlsConnections;
     std::mutex m_tlsContextsMutex;
-    std::unordered_map<std::string, std::shared_ptr<SSL_CTX>> m_tlsContexts;
+    HashMapT<std::string, std::shared_ptr<SSL_CTX>> m_tlsContexts;
     std::atomic<bool> m_hasTLSConnections = false;
 
     int m_epollFD;

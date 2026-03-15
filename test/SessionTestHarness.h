@@ -16,7 +16,6 @@
 #include <functional>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace fix_test {
@@ -306,9 +305,9 @@ public:
     }
 
     // Parse raw FIX message bytes into tag-value map.
-    static std::unordered_map<int, std::string> parseTags(const std::string& raw)
+    static HashMapT<int, std::string> parseTags(const std::string& raw)
     {
-        std::unordered_map<int, std::string> result;
+        HashMapT<int, std::string> result;
         size_t pos = 0;
         while (pos < raw.size()) {
             auto eq = raw.find('=', pos);

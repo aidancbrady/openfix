@@ -1,11 +1,11 @@
 #pragma once
 
 #include <openfix/LinkedHashMap.h>
+#include <openfix/Types.h>
 
 #include <map>
 #include <memory>
 #include <sstream>
-#include <unordered_map>
 #include <vector>
 
 #include "Config.h"
@@ -58,13 +58,13 @@ enum class FieldType
 struct FieldTypes
 {
 #define F(x) {#x, FieldType::x}
-    inline static std::unordered_map<std::string, FieldType> LOOKUP{FIELD_TYPES};
+    inline static HashMapT<std::string, FieldType> LOOKUP{FIELD_TYPES};
 #undef F
 };
 
 struct GroupSpec
 {
-    using FieldSet = std::unordered_map<int, bool>;
+    using FieldSet = HashMapT<int, bool>;
 
     bool empty() const
     {
@@ -72,7 +72,7 @@ struct GroupSpec
     }
 
     FieldSet m_fields;
-    std::unordered_map<int, std::shared_ptr<GroupSpec>> m_groups;
+    HashMapT<int, std::shared_ptr<GroupSpec>> m_groups;
     bool m_ordered = false;
     std::vector<int> m_fieldOrder;
 };
@@ -165,7 +165,7 @@ public:
         return m_groups.erase(tag);
     }
 
-    const std::unordered_map<int, std::vector<FieldMap>>& getGroups() const
+    const HashMapT<int, std::vector<FieldMap>>& getGroups() const
     {
         return m_groups;
     }
@@ -201,7 +201,7 @@ public:
 
 private:
     LinkedHashMap<int, std::string> m_fields;
-    std::unordered_map<int, std::vector<FieldMap>> m_groups;
+    HashMapT<int, std::vector<FieldMap>> m_groups;
 
     // if this is a group present in our dictionary, we can reference additional metadata here
     std::shared_ptr<GroupSpec> m_groupSpec;

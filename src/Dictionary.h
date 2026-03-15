@@ -4,8 +4,6 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 
 #include "Config.h"
 #include "Fields.h"
@@ -63,8 +61,8 @@ private:
     std::shared_ptr<GroupSpec> m_headerSpec;
     std::shared_ptr<GroupSpec> m_trailerSpec;
 
-    std::unordered_map<std::string, std::shared_ptr<GroupSpec>> m_bodySpecs;
-    std::unordered_map<int, FieldType> m_fields;
+    HashMapT<std::string, std::shared_ptr<GroupSpec>> m_bodySpecs;
+    HashMapT<int, FieldType> m_fields;
 
     friend class DictionaryRegistry;
 
@@ -83,7 +81,7 @@ public:
     std::shared_ptr<Dictionary> load(const std::string& path);
 
 private:
-    std::unordered_map<std::string, std::shared_ptr<Dictionary>> m_dictionaries;
+    HashMapT<std::string, std::shared_ptr<Dictionary>> m_dictionaries;
 
     CREATE_LOGGER("DictionaryRegistry");
 };

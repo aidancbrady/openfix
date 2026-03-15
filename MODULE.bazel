@@ -1,5 +1,4 @@
 bazel_dep(name = "spdlog", version = "1.13.0")
-bazel_dep(name = "onetbb", version = "2021.11.0")
 bazel_dep(name = "googletest", version = "1.17.0")
 bazel_dep(name = "pugixml", version = "1.14")
 bazel_dep(name = "rules_cc", version = "0.2.14")
@@ -18,4 +17,33 @@ git_override(
     module_name = "hedron_compile_commands",
     commit = "f5fbd4cee671d8d908f37c83abaf70fba5928fc7",
     remote = "https://github.com/mikael-s-persson/bazel-compile-commands-extractor",
+)
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+    name = "concurrentqueue",
+    urls = ["https://github.com/cameron314/concurrentqueue/archive/refs/tags/v1.0.4.tar.gz"],
+    strip_prefix = "concurrentqueue-1.0.4",
+    build_file_content = """
+cc_library(
+    name = "concurrentqueue",
+    hdrs = ["concurrentqueue.h", "blockingconcurrentqueue.h", "lightweightsemaphore.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+""",
+)
+http_archive(
+    name = "unordered_dense",
+    urls = ["https://github.com/martinus/unordered_dense/archive/refs/tags/v4.8.1.tar.gz"],
+    sha256 = "9f7202ec6d8353932ef865d33f5872e4b7a1356e9032da7cd09c3a0c5bb2b7de",
+    strip_prefix = "unordered_dense-4.8.1",
+    build_file_content = """
+cc_library(
+    name = "unordered_dense",
+    hdrs = glob(["include/ankerl/*.h"]),
+    strip_include_prefix = "include",
+    visibility = ["//visibility:public"],
+)
+""",
 )

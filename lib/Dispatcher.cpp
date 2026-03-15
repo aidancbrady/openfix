@@ -28,13 +28,13 @@ void Worker::run()
     while (!m_stop.load(std::memory_order_acquire)) {
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            m_cv.wait(lock, [&]() { return m_stop.load() || !m_queue.empty(); });
+            m_cv.wait(lock, [&]() { return m_stop.load() || m_queue.size_approx() > 0; });
         }
 
         if (m_stop.load())
             return;
         Callback task;
-        if (m_queue.try_pop(task))
+        if (m_queue.try_dequeue(task))
             task();
     }
 }
@@ -43,7 +43,7 @@ void Worker::dispatch(Callback&& callback)
 {
     {
         std::lock_guard lock(m_mutex);
-        m_queue.push(callback);
+        m_queue.enqueue(callback);
     }
     m_cv.notify_one();
 }

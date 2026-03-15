@@ -796,7 +796,7 @@ void ReaderThread::queue(int fd)
     // we don't need to lock as we process
     {
         std::lock_guard lock(m_mutex);
-        m_readyFDs.push(fd);
+        m_readyFDs.enqueue(fd);
     }
 
     m_cv.notify_one();
@@ -828,14 +828,14 @@ void ReaderThread::process()
 {
     while (m_running.load(std::memory_order_acquire)) {
         std::unique_lock lock(m_mutex);
-        m_cv.wait(lock, [&]() { return !m_running.load() || !m_readyFDs.empty(); });
+        m_cv.wait(lock, [&]() { return !m_running.load() || m_readyFDs.size_approx() > 0; });
         lock.unlock();
 
         if (!m_running.load(std::memory_order_acquire))
             break;
 
         int fd;
-        if (!m_readyFDs.try_pop(fd))
+        if (!m_readyFDs.try_dequeue(fd))
             continue;
 
         try {

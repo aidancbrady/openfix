@@ -3,7 +3,6 @@
 #include <atomic>
 #include <memory>
 #include <thread>
-#include <unordered_map>
 
 #include "AdminWebsite.h"
 #include "FIXLogger.h"
@@ -54,7 +53,7 @@ private:
 
     std::thread m_updateThread;
 
-    std::unordered_map<std::string, std::shared_ptr<Session>> m_sessionMap;
+    HashMapT<std::string, std::shared_ptr<Session>> m_sessionMap;
 
     std::unique_ptr<AdminWebsite> m_adminWebsite;
 

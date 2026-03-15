@@ -402,7 +402,7 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     if (trailer.empty())
         throw DictionaryParsingError("FIX dictionary missing <trailer> section");
 
-    std::unordered_map<std::string, int> fieldMap;
+    HashMapT<std::string, int> fieldMap;
 
     auto fields = root.child("fields");
     for (auto field : fields.children()) {
@@ -424,10 +424,10 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     }
 
     auto components = root.child("components");
-    std::unordered_map<std::string, GroupSpec> componentMap;
+    HashMapT<std::string, GroupSpec> componentMap;
 
-    std::unordered_map<std::string, pugi::xml_node> componentXMLMap;
-    std::unordered_map<std::string, std::unordered_set<std::string>> componentGraph;
+    HashMapT<std::string, pugi::xml_node> componentXMLMap;
+    HashMapT<std::string, HashSetT<std::string>> componentGraph;
 
     // fully qualified name since we call this recursively
     std::function<void(const pugi::xml_node&, std::string)> validateGroup = [&](const pugi::xml_node& node, std::string parentComponent) {
@@ -488,7 +488,7 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
     // third pass, toposort
     std::vector<std::string> sorted;
     {
-        std::unordered_map<std::string, int> indegrees;
+        HashMapT<std::string, int> indegrees;
         for (const auto& [node, children] : componentGraph) {
             if (indegrees.find(node) == indegrees.end())
                 indegrees[node] = 0;

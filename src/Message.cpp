@@ -2,12 +2,11 @@
 
 #include <charconv>
 #include <functional>
-#include <unordered_set>
 
 #include "Checksum.h"
 #include "Fields.h"
 
-const std::unordered_set<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
+const HashSetT<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
 
 static void appendInt(std::string& out, int val)
 {

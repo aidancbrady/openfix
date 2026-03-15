@@ -6,9 +6,9 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
 
 #include "Log.h"
+#include "Types.h"
 
 // 1KB write buffer
 #define BUF_SIZE 1024
@@ -68,7 +68,7 @@ private:
 
     std::thread m_thread;
 
-    std::unordered_map<std::string, std::unique_ptr<WriterInstance>> m_instances;
+    HashMapT<std::string, std::unique_ptr<WriterInstance>> m_instances;
 
     std::condition_variable m_cv;
     std::mutex m_mutex;

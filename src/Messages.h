@@ -1,7 +1,8 @@
 #pragma once
 
+#include <openfix/Types.h>
+
 #include <string>
-#include <unordered_set>
 
 namespace MESSAGE {
 inline std::string HEARTBEAT = "0";
@@ -13,5 +14,5 @@ inline std::string LOGOUT = "5";
 inline std::string LOGON = "A";
 
 // no REJECT, this can be retransmitted in a resend
-inline static std::unordered_set<std::string> SESSION_MSGS = {HEARTBEAT, TEST_REQUEST, RESEND_REQUEST, SEQUENCE_RESET, LOGOUT, LOGON};
+inline static HashSetT<std::string> SESSION_MSGS = {HEARTBEAT, TEST_REQUEST, RESEND_REQUEST, SEQUENCE_RESET, LOGOUT, LOGON};
 }  // namespace MESSAGE

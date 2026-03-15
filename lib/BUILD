@@ -8,7 +8,8 @@ cc_library(
     hdrs = glob(["*.h"]),
     srcs = glob(["*.cpp"]),
     deps = [
-        "@onetbb//:tbb",
+        "@concurrentqueue//:concurrentqueue",
+        "@unordered_dense//:unordered_dense",
         "@spdlog//:spdlog"
     ]
 )

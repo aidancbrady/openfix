@@ -1,17 +1,15 @@
 #pragma once
 
-#include <oneapi/tbb/concurrent_queue.h>
-
 #include <atomic>
 #include <condition_variable>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 #include "Log.h"
+#include "Types.h"
 
 using TimerID = uint32_t;
 using Callback = std::function<void()>;
@@ -34,7 +32,7 @@ public:
 private:
     std::mutex m_mutex;
     std::condition_variable m_cv;
-    tbb::concurrent_queue<Callback> m_queue;
+    LockFreeQueueT<Callback> m_queue;
     std::thread m_thread;
     std::atomic<bool> m_stop;
 
@@ -103,7 +101,7 @@ private:
     std::atomic<bool> m_stop;
 
     std::atomic<TimerID> m_timerCount;
-    std::unordered_map<TimerID, TimerEvent> m_timers;
+    HashMapT<TimerID, TimerEvent> m_timers;
     std::map<uint64_t, std::vector<TimerID>> m_events;
 
     std::mutex m_mutex;

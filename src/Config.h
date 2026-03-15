@@ -1,12 +1,12 @@
 #pragma once
 
 #include <openfix/Log.h>
+#include <openfix/Types.h>
 #include <strings.h>
 
 #include <string>
 #include <typeindex>
 #include <typeinfo>
-#include <unordered_map>
 #include <vector>
 
 #include "Exception.h"
@@ -82,7 +82,7 @@ public:
         return m_doubleValues[item.index];
     }
 
-    void load(const std::unordered_map<std::string, std::string>& settings)
+    void load(const HashMapT<std::string, std::string>& settings)
     {
         for (const auto& [key, val] : settings) {
             auto it = defaults().m_fields.find(key);
@@ -134,7 +134,7 @@ protected:
 protected:
     struct Defaults
     {
-        std::unordered_map<std::string, std::pair<std::type_index, size_t>> m_fields;
+        HashMapT<std::string, std::pair<std::type_index, size_t>> m_fields;
 
         std::vector<std::string> m_strings;
         std::vector<long> m_longs;
@@ -180,7 +180,7 @@ public:
         return instance().Config<Class>::getDouble(item);
     }
 
-    static void load(const std::unordered_map<std::string, std::string>& settings)
+    static void load(const HashMapT<std::string, std::string>& settings)
     {
         instance().Config<Class>::load(settings);
     }
