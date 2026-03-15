@@ -304,7 +304,7 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
         LOG_DEBUG("Created server socket on port " << port << " with fd=" << fd);
 
         struct sockaddr_in addr;
-        addr.sin_family = AF_UNSPEC;  // support ipv4
+        addr.sin_family = AF_INET;
         addr.sin_port = ::htons(port);
         addr.sin_addr.s_addr = INADDR_ANY;
 
@@ -373,7 +373,7 @@ void Network::run()
     long timeout = PlatformSettings::getLong(PlatformSettings::EPOLL_TIMEOUT);
 
     while (m_running) {
-        while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) > 0) {
+        while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) != 0) {
             if (numEvents < 0) {
                 if (errno == EINTR) {
                     LOG_WARN("epoll_wait was interrupted by a signal.");
@@ -382,11 +382,6 @@ void Network::run()
 
                 LOG_ERROR("epoll_wait error: " << strerror(errno));
                 break;
-            }
-
-            if (numEvents == 0) {
-                LOG_TRACE("epoll_wait timeout");
-                continue;
             }
 
             for (int i = 0; i < numEvents; i++) {

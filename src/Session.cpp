@@ -232,9 +232,9 @@ void Session::handleLogon(const Message& msg)
     int seqNum = std::stoi(msg.getHeader().getField(FIELD::MsgSeqNum));
     int expectedTargetSeqNum = m_cache->getTargetSeqNum();
 
-    bool isPosDup = msg.getBody().tryGetBool(FIELD::PosDupFlag);
+    bool isPossDup = msg.getHeader().tryGetBool(FIELD::PossDupFlag);
 
-    if (!isPosDup && seqNum < expectedTargetSeqNum) {
+    if (!isPossDup && seqNum < expectedTargetSeqNum) {
         logout("MsgSeqNum(34) too low, expected " + std::to_string(m_cache->getTargetSeqNum()), true);
         return;
     }
@@ -304,7 +304,7 @@ void Session::runMessageRecovery(int beginSeqNo, int endSeqNo)
         if (seqno != ptr)
             sendSequenceReset(ptr, seqno);
 
-        msg.getHeader().setField(FIELD::PosDupFlag, "Y");
+        msg.getHeader().setField(FIELD::PossDupFlag, "Y");
         msg.getHeader().setField(FIELD::OrigSendingTime, msg.getHeader().getField(FIELD::SendingTime));
         msg.getHeader().setField(FIELD::SendingTime, Utils::getUTCTimestamp());
 
@@ -406,7 +406,7 @@ void Session::sendSequenceReset(int seqno, int new_seqno, bool gapfill)
     populateMessage(msg);
     msg.getHeader().setField(FIELD::OrigSendingTime, Utils::getUTCTimestamp());
     msg.getHeader().setField(FIELD::MsgSeqNum, std::to_string(seqno));
-    msg.getHeader().setField(FIELD::PosDupFlag, "Y");
+    msg.getHeader().setField(FIELD::PossDupFlag, "Y");
     msg.getBody().setField(FIELD::NewSeqNo, std::to_string(new_seqno));
 
     if (gapfill)
@@ -526,8 +526,8 @@ bool Session::validateMessage(const Message& msg, long time)
         return false;
     }
 
-    bool isPosDup = msg.getBody().tryGetBool(FIELD::PosDupFlag);
-    if (isPosDup && !msg.getBody().has(FIELD::OrigSendingTime)) {
+    bool isPossDup = msg.getHeader().tryGetBool(FIELD::PossDupFlag);
+    if (isPossDup && !msg.getHeader().has(FIELD::OrigSendingTime)) {
         sendReject(msg, SessionRejectReason::RequiredTagMissing);
         return false;
     }
@@ -562,7 +562,6 @@ bool Session::validateSeqNum(const Message& msg)
         sendResendRequest(getTargetSeqNum(), seqNum);
     }
 
-    m_cache->nextTargetSeqNum();
     return false;
 }
 

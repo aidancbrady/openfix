@@ -176,7 +176,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
             auto trySetField = [&](ParserGroupInfo& group, int groupIdx) {
                 // spec contains field
                 auto fieldIt = group.m_spec->m_fields.find(tag);
-                if (fieldIt != m_headerSpec->m_fields.end()) {
+                if (fieldIt != group.m_spec->m_fields.end()) {
                     if (group.m_group.get().has(tag))
                         return handleRepeatingTag(group, groupIdx);
 
