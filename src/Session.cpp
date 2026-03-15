@@ -419,10 +419,12 @@ void Session::logout(const std::string& reason, bool terminate)
 {
     LOG_INFO("Logging out (" << (terminate ? "terminal" : "clean") << "), reason: " << reason);
 
-    if (terminate)
+    if (terminate) {
         m_state = SessionState::KILLING;
-    else
+    } else {
         m_state = SessionState::LOGOUT;
+        m_logoutTime = Utils::getEpochMillis();
+    }
 
     sendLogout(reason, terminate);
 }
