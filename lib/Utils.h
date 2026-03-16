@@ -7,6 +7,7 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <string_view>
 
 struct Utils
 {
@@ -15,8 +16,10 @@ struct Utils
         return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     }
 
-    // parse fixed-format FIX timestamp: YYYYMMDD-HH:MM:SS[.fff[fff]]
-    inline static long parseUTCTimestamp(const std::string& timestamp)
+    // Parse fixed-format FIX timestamp: YYYYMMDD-HH:MM:SS[.fff[fff]]
+    // Pure arithmetic UTC conversion -- no libc calls, no locks.
+    // Uses Howard Hinnant's civil calendar algorithm for days-since-epoch.
+    inline static long parseUTCTimestamp(std::string_view timestamp)
     {
         // minimum: "YYYYMMDD-HH:MM:SS" = 17 chars
         if (timestamp.size() < 17)
@@ -28,32 +31,39 @@ struct Utils
             return val;
         };
 
-        std::tm tm = {};
-        tm.tm_year = parseN(0, 4) - 1900;
-        tm.tm_mon = parseN(4, 2) - 1;
-        tm.tm_mday = parseN(6, 2);
-        tm.tm_hour = parseN(9, 2);
-        tm.tm_min = parseN(12, 2);
-        tm.tm_sec = parseN(15, 2);
+        const int year   = parseN(0, 4);
+        const int month  = parseN(4, 2);
+        const int day    = parseN(6, 2);
+        const int hour   = parseN(9, 2);
+        const int minute = parseN(12, 2);
+        const int second = parseN(15, 2);
 
-        std::time_t t = timegm(&tm);
-        long ms = static_cast<long>(t) * 1000L;
+        // Civil calendar -> days since Unix epoch (1970-01-01)
+        const int y   = year - (month <= 2 ? 1 : 0);
+        const int era = (y >= 0 ? y : y - 399) / 400;
+        const int yoe = y - era * 400;                                             // [0, 399]
+        const int doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1; // [0, 365]
+        const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;                    // [0, 146096]
+        const int days = era * 146097 + doe - 719468;
+
+        long ms = static_cast<long>(days) * 86400000L
+                + static_cast<long>(hour) * 3600000L
+                + static_cast<long>(minute) * 60000L
+                + static_cast<long>(second) * 1000L;
 
         // parse fractional seconds if present
         if (timestamp.size() > 18 && timestamp[17] == '.') {
-            size_t frac_start = 18;
-            size_t frac_len = timestamp.size() - frac_start;
+            const size_t frac_start = 18;
+            const size_t frac_len = timestamp.size() - frac_start;
             int frac = 0;
             std::from_chars(timestamp.data() + frac_start, timestamp.data() + frac_start + frac_len, frac);
 
             // normalize to milliseconds: 3 digits = ms, 6 digits = us -> ms
             if (frac_len <= 3) {
-                // pad: e.g. "1" -> 100, "12" -> 120
                 for (size_t i = frac_len; i < 3; ++i)
                     frac *= 10;
                 ms += frac;
             } else {
-                // truncate to ms: e.g. 6 digits -> divide by 1000
                 for (size_t i = 3; i < frac_len; ++i)
                     frac /= 10;
                 ms += frac;
@@ -67,8 +77,8 @@ struct Utils
     // Uses thread_local cache: gmtime_r + strftime only called once per second.
     inline static std::string getUTCTimestamp()
     {
-        auto now = std::chrono::system_clock::now();
-        auto epoch_s = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+        const auto now = std::chrono::system_clock::now();
+        const auto epoch_s = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
 
         thread_local time_t cached_s = 0;
         thread_local char cached_prefix[18]; // "YYYYMMDD-HH:MM:SS" + null
@@ -80,7 +90,7 @@ struct Utils
             std::strftime(cached_prefix, sizeof(cached_prefix), "%Y%m%d-%H:%M:%S", &utc);
         }
 
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
 
         char buf[32];
         std::memcpy(buf, cached_prefix, 17);
@@ -93,8 +103,8 @@ struct Utils
     // Uses thread_local cache: gmtime_r + strftime only called once per second.
     inline static std::string formatTimestampMicros(int64_t epoch_us)
     {
-        auto epoch_s = static_cast<time_t>(epoch_us / 1000000);
-        auto us = static_cast<int>(epoch_us % 1000000);
+        const auto epoch_s = static_cast<time_t>(epoch_us / 1000000);
+        const auto us = static_cast<int>(epoch_us % 1000000);
 
         thread_local time_t cached_s = 0;
         thread_local char cached_prefix[18];
@@ -116,7 +126,7 @@ struct Utils
     // Format UTC timestamp for logging: YYYYMMDD-HH:MM:SS.uuuuuu (microsecond precision)
     inline static std::string getUTCTimestampMicros()
     {
-        auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         return formatTimestampMicros(us);
     }
@@ -144,15 +154,29 @@ struct Utils
         return {msg.substr(begin_it, (end_it - begin_it)), end_it};
     }
 
-    // Overload that takes a pre-built search pattern (SOH + tag + '=') to avoid any allocation.
-    // Use buildTagPattern() to construct the pattern at startup.
+    // Zero-copy overload: returns a string_view into the original message.
+    // Takes a pre-built search pattern (SOH + tag + '=').
+    inline static std::pair<std::string_view, size_t> getTagValueView(const std::string& msg, const std::string& pattern, size_t patternLen, size_t idx)
+    {
+        auto begin_it = msg.find(pattern, idx);
+        if (begin_it == std::string::npos)
+            return {{}, std::string::npos};
+        begin_it += patternLen;
+        const auto end_it = msg.find('\01', begin_it);
+        if (end_it == std::string::npos)
+            return {{}, std::string::npos};
+        return {std::string_view(msg.data() + begin_it, end_it - begin_it), end_it};
+    }
+
+    // Allocating overload (legacy): returns a string copy.
+    // Takes a pre-built search pattern (SOH + tag + '=').
     inline static std::pair<std::string, size_t> getTagValue(const std::string& msg, const std::string& pattern, size_t patternLen, size_t idx)
     {
         auto begin_it = msg.find(pattern, idx);
         if (begin_it == std::string::npos)
             return {"", begin_it};
         begin_it += patternLen;
-        auto end_it = msg.find('\01', begin_it);
+        const auto end_it = msg.find('\01', begin_it);
         if (end_it == std::string::npos)
             return {"", end_it};
         return {msg.substr(begin_it, (end_it - begin_it)), end_it};

@@ -36,6 +36,15 @@ struct Logger
 #define __LOWER_ERROR error
 #define __LOWER_FATAL critical
 
+// spdlog level constants via token pasting (avoids macro parameter collision with spdlog::level::)
+#define __SPDLOG_LEVEL(TOK) __SPDLOG_LEVEL_ ## TOK
+#define __SPDLOG_LEVEL_TRACE spdlog::level::trace
+#define __SPDLOG_LEVEL_DEBUG spdlog::level::debug
+#define __SPDLOG_LEVEL_INFO  spdlog::level::info
+#define __SPDLOG_LEVEL_WARN  spdlog::level::warn
+#define __SPDLOG_LEVEL_ERROR spdlog::level::err
+#define __SPDLOG_LEVEL_FATAL spdlog::level::critical
+
 #define CREATE_LOGGER(name) static inline std::shared_ptr<spdlog::logger> __LOGGER__ = Logger::get_logger(#name);
 
 #define LOG_TRACE(arg1, ...) __LOG(arg1, ##__VA_ARGS__, TRACE, _EXPLICIT, _IMPLICIT)
@@ -51,7 +60,9 @@ struct Logger
 
 #define __LOG_IMPL(logger, msg, level)                                                \
     do {                                                                              \
-        std::ostringstream ostr;                                                      \
-        ostr << msg;                                                                  \
-        logger->__LOWER(level)(ostr.str());                                           \
+        if (logger->should_log(__SPDLOG_LEVEL(level))) {                              \
+            std::ostringstream ostr;                                                  \
+            ostr << msg;                                                              \
+            logger->__LOWER(level)(ostr.str());                                       \
+        }                                                                             \
     } while (0);

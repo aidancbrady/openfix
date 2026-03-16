@@ -117,6 +117,15 @@ public:
 
     void reserve(size_t n) { m_data.reserve(n); }
 
+    // Pre-allocate the flat index to avoid repeated reallocations
+    // when inserting keys up to maxKey. Only available for integral keys.
+    void reserveIndex(size_t maxKey)
+        requires Indexed
+    {
+        if (maxKey >= m_index.size())
+            m_index.resize(maxKey + 1, -1);
+    }
+
     bool empty() const { return m_data.empty(); }
     size_t size() const { return m_data.size(); }
 

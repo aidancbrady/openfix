@@ -12,7 +12,7 @@
 class Dictionary
 {
 public:
-    Message parse(const SessionSettings& settings, const std::string& text) const;
+    Message parse(const SessionSettings& settings, std::string text) const;
 
     Message create(const std::string& msg_type) const
     {

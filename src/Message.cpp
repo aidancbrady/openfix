@@ -116,7 +116,50 @@ std::string Message::toString(bool internal) const
     return serialize(internal ? INTERNAL_SOH_CHAR : EXTERNAL_SOH_CHAR);
 }
 
-void FieldMap::setField(int tag, std::string value, bool order)
+// Materializing copy constructor: deep-copies all string_views into owned storage.
+FieldMap::FieldMap(const FieldMap& other)
+    : m_groups(other.m_groups)
+    , m_groupSpec(other.m_groupSpec)
+{
+    m_fields.reserve(other.m_fields.size());
+    for (const auto& [tag, sv] : other.m_fields) {
+        auto [it, _] = m_ownedStorage.emplace(tag, std::string(sv));
+        m_fields.insert({tag, std::string_view(it->second)});
+    }
+}
+
+FieldMap& FieldMap::operator=(const FieldMap& other)
+{
+    if (this == &other)
+        return *this;
+
+    m_fields = {};
+    m_ownedStorage.clear();
+    m_groups = other.m_groups;
+    m_groupSpec = other.m_groupSpec;
+
+    m_fields.reserve(other.m_fields.size());
+    for (const auto& [tag, sv] : other.m_fields) {
+        auto [it, _] = m_ownedStorage.emplace(tag, std::string(sv));
+        m_fields.insert({tag, std::string_view(it->second)});
+    }
+    return *this;
+}
+
+void FieldMap::setField(int tag, std::string_view value, bool order)
+{
+    auto [it, inserted] = m_ownedStorage.emplace(tag, std::string(value));
+    if (!inserted)
+        it->second = std::string(value);
+    insertFieldView(tag, std::string_view(it->second), order);
+}
+
+void FieldMap::setFieldView(int tag, std::string_view value, bool order)
+{
+    insertFieldView(tag, value, order);
+}
+
+void FieldMap::insertFieldView(int tag, std::string_view value, bool order)
 {
     // if we don't care about order we can put this tag anywhere
     if (!order || !m_groupSpec || !m_groupSpec->m_ordered) {
@@ -157,7 +200,7 @@ void FieldMap::setField(int tag, std::string value, bool order)
 
 void FieldMap::sortFields()
 {
-    LinkedHashMap<int, std::string> newFields;
+    LinkedHashMap<int, std::string_view> newFields;
 
     if (m_groupSpec) {
         for (const auto tag : m_groupSpec->m_fieldOrder) {
@@ -169,7 +212,7 @@ void FieldMap::sortFields()
         }
     }
 
-    std::vector<std::pair<int, std::string>> entries;
+    std::vector<std::pair<int, std::string_view>> entries;
     for (const auto& entry : m_fields)
         entries.emplace_back(entry);
     std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });

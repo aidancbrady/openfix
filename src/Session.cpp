@@ -48,16 +48,16 @@ void Session::stop()
 
 void Session::onMessage(std::string text)
 {
-    m_dispatcher.dispatch([this, text = std::move(text)] {
+    m_dispatcher.dispatch([this, text = std::move(text)]() mutable {
         if (m_state == SessionState::KILLING) {
             LOG_WARN("Received message while killing session, ignoring");
             return;
         }
 
         try {
-            // parse message
-            const auto msg = m_dictionary->parse(m_settings, text);
-            m_logger.logMessage(text, Direction::INBOUND);
+            // parse message; move text to avoid a copy (parse takes by value)
+            const auto msg = m_dictionary->parse(m_settings, std::move(text));
+            m_logger.logMessage(msg.getSourceText(), Direction::INBOUND);
 
             LOG_DEBUG("Received: " << msg);
 
@@ -73,7 +73,7 @@ void Session::onMessage(std::string text)
                 queue.erase(queue.begin());
             }
         } catch (const MessageParsingError& e) {
-            LOG_ERROR("Error while parsing message: " << e.what() << "\nfull message:\n" << text);
+            LOG_ERROR("Error while parsing message: " << e.what());
         } catch (...) {
             LOG_ERROR("Unknown error while handling message!");
         }
@@ -82,7 +82,7 @@ void Session::onMessage(std::string text)
 
 void Session::processMessage(const Message& msg, long time)
 {
-    const auto& msgType = msg.getHeader().getField(FIELD::MsgType);
+    const auto msgType = msg.getHeader().getField(FIELD::MsgType);
 
     if (!validateMessage(msg, time)) {
         LOG_ERROR("Message failed validations: " << msg);
@@ -128,7 +128,7 @@ void Session::processMessage(const Message& msg, long time)
             }
         }
     } else if (msgType == MESSAGE::TEST_REQUEST) {
-        const auto& test_id = msg.getBody().getField(FIELD::TestReqID);
+        const auto test_id = msg.getBody().getField(FIELD::TestReqID);
         LOG_DEBUG("Responding to test request ID=" << test_id << " with heartbeat");
         sendHeartbeat(time, std::string(test_id));
     } else if (msgType == MESSAGE::REJECT) {
@@ -315,7 +315,7 @@ void Session::runMessageRecovery(int beginSeqNo, int endSeqNo)
     int ptr = beginSeqNo;
     m_cache->getMessages(beginSeqNo, endSeqNo, [&](int seqno, Message msg) {
         // skip session-level messages
-        if (MESSAGE::SESSION_MSGS.count(msg.getHeader().getField(FIELD::MsgType)))
+        if (MESSAGE::SESSION_MSGS.count(std::string(msg.getHeader().getField(FIELD::MsgType))))
             return;
 
         // send gapfill if we need to
@@ -323,8 +323,8 @@ void Session::runMessageRecovery(int beginSeqNo, int endSeqNo)
             sendSequenceReset(ptr, seqno);
 
         msg.getHeader().setField(FIELD::PossDupFlag, "Y");
-        const auto sendingTime = std::string(msg.getHeader().getField(FIELD::SendingTime));
-        msg.getHeader().setField(FIELD::OrigSendingTime, std::move(sendingTime));
+        const std::string sendingTime(msg.getHeader().getField(FIELD::SendingTime));
+        msg.getHeader().setField(FIELD::OrigSendingTime, sendingTime);
         msg.getHeader().setField(FIELD::SendingTime, Utils::getUTCTimestamp());
 
         internal_send(msg, {});
@@ -527,13 +527,13 @@ bool Session::validateMessage(const Message& msg, long time)
 
     // validate BeginString, SenderCompID, TargetCompID
     if (msg.getHeader().getField(FIELD::BeginString) != m_settings.getString(SessionSettings::BEGIN_STRING)) {
-        fail("Failed to validate BeginString(8): " + msg.getHeader().getField(FIELD::BeginString));
+        fail(std::string("Failed to validate BeginString(8): ").append(msg.getHeader().getField(FIELD::BeginString)));
         return false;
     } else if (msg.getHeader().getField(FIELD::SenderCompID) != m_settings.getString(SessionSettings::TARGET_COMP_ID)) {
-        fail("Failed to validate SenderCompID(49): " + msg.getHeader().getField(FIELD::SenderCompID));
+        fail(std::string("Failed to validate SenderCompID(49): ").append(msg.getHeader().getField(FIELD::SenderCompID)));
         return false;
     } else if (msg.getHeader().getField(FIELD::TargetCompID) != m_settings.getString(SessionSettings::SENDER_COMP_ID)) {
-        fail("Failed to validate TargetCompID(56): " + msg.getHeader().getField(FIELD::TargetCompID));
+        fail(std::string("Failed to validate TargetCompID(56): ").append(msg.getHeader().getField(FIELD::TargetCompID)));
         return false;
     }
 
@@ -553,14 +553,14 @@ bool Session::validateMessage(const Message& msg, long time)
         return false;
     }
 
-    const auto& msgType = msg.getHeader().getField(FIELD::MsgType);
+    const auto msgType = msg.getHeader().getField(FIELD::MsgType);
     if (m_state == SessionState::LOGON && msgType != MESSAGE::LOGON) {
-        logout("Received unexpected MsgType(35) during logon state: " + msgType, true);
+        logout(std::string("Received unexpected MsgType(35) during logon state: ").append(msgType), true);
         return false;
     }
 
     if (m_state == SessionState::LOGOUT && msgType != MESSAGE::LOGOUT && msgType != MESSAGE::RESEND_REQUEST) {
-        logout("Received unexpected MsgType(35) during logoff state: " + msgType, true);
+        logout(std::string("Received unexpected MsgType(35) during logoff state: ").append(msgType), true);
         return false;
     }
 

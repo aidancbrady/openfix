@@ -1062,26 +1062,25 @@ std::vector<std::string> ReadBuffer::read(int fd)
                 consumed = ptr;
             }
 
-            // find start of bodylength tag
-            auto tag_it = Utils::getTagValue(buffer, BODY_LENGTH_PATTERN, BODY_LENGTH_PATTERN.size(), ptr);
+            // find start of bodylength tag (zero-copy)
+            auto tag_it = Utils::getTagValueView(buffer, BODY_LENGTH_PATTERN, BODY_LENGTH_PATTERN.size(), ptr);
             if (tag_it.first.empty())
                 break;
             ptr = tag_it.second;
 
-            try {
-                const int bodyLength = std::stoi(tag_it.first);
-                if (bodyLength < 0)
-                    throw std::runtime_error("Negative body length");
+            {
+                int bodyLength = 0;
+                const auto [p, ec] = std::from_chars(tag_it.first.data(), tag_it.first.data() + tag_it.first.size(), bodyLength);
+                if (ec != std::errc{} || bodyLength < 0) {
+                    LOG_WARN("Unable to parse message, bad body length: " << buffer.substr(consumed, ptr + 1 - consumed));
+                    consumed = ptr + 1;
+                    continue;
+                }
                 ptr += bodyLength;
-            } catch (...) {
-                LOG_WARN("Unable to parse message, bad body length: " << buffer.substr(consumed, ptr + 1 - consumed));
-                // corrupted message, skip past it and try the next one
-                consumed = ptr + 1;
-                continue;
             }
 
-            // find the checksum
-            tag_it = Utils::getTagValue(buffer, CHECKSUM_PATTERN, CHECKSUM_PATTERN.size(), ptr);
+            // find the checksum (zero-copy, we only need the position)
+            tag_it = Utils::getTagValueView(buffer, CHECKSUM_PATTERN, CHECKSUM_PATTERN.size(), ptr);
             if (tag_it.first.empty())
                 break;
             ptr = tag_it.second;

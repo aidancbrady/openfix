@@ -63,19 +63,28 @@ struct ParserGroupInfo
         } while (0);                               \
     }
 
-Message Dictionary::parse(const SessionSettings& settings, const std::string& text) const
+Message Dictionary::parse(const SessionSettings& settings, std::string text_in) const
 {
     const bool loudParsing = settings.getBool(SessionSettings::LOUD_PARSING);
     const bool relaxedParsing = settings.getBool(SessionSettings::RELAXED_PARSING);
     const bool validateRequired = settings.getBool(SessionSettings::VALIDATE_REQUIRED_FIELDS);
 
     Message ret;
+    // Own the source text so all string_views created during parsing remain valid
+    // for the lifetime of the Message. Move avoids a second copy.
+    ret.m_sourceText = std::move(text_in);
+    const std::string& text = ret.m_sourceText;
 
     // Pre-allocate FieldMaps: typical FIX field is ~8 chars
     const size_t estimatedFields = text.size() / 8;
     ret.getHeader().reserve(10);
     ret.getBody().reserve(estimatedFields > 11 ? estimatedFields - 11 : 4);
     ret.getTrailer().reserve(2);
+
+    // Pre-allocate flat index to avoid repeated reallocations during parsing.
+    // Header tags go up to OrigSendingTime(122), trailer just needs CheckSum(10).
+    ret.getHeader().reserveIndex(FIELD::OrigSendingTime);
+    ret.getTrailer().reserveIndex(FIELD::CheckSum);
 
     MessageState msgState = MessageState::HEADER;
     ParserState state = ParserState::START;
@@ -151,7 +160,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 if (tag == FIELD::BodyLength)
                     bodyLengthStart = i + 1;
                 // don't order, we batch order fields after parsing is done
-                fieldMap.setField(tag, std::string(val), false);
+                // zero-copy: val is a view into the original message text
+                fieldMap.setFieldView(tag, val, false);
 
                 state = ParserState::NEXT;
             };
@@ -313,8 +323,8 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
                 if (getFieldType(tag) == FieldType::DATA) {
                     if (i + dataLength >= text.size())
                         TRY_LOG_THROW("Data tag length would exceed message size");
-                    std::string_view data_val(text.data() + i + 1, static_cast<size_t>(dataLength));
-                    curGroup().setField(tag, std::string(data_val), false);
+                    const std::string_view data_val(text.data() + i + 1, static_cast<size_t>(dataLength));
+                    curGroup().setFieldView(tag, data_val, false);
                     i += dataLength;
                 }
 
@@ -352,7 +362,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
         // verify bodylength
         const auto expectedLength = text.size() - bodyLengthStart - 7;
         {
-            const auto& blStr = ret.getHeader().getField(FIELD::BodyLength);
+            const auto blStr = ret.getHeader().getField(FIELD::BodyLength);
             unsigned long bodyLength = 0;
             auto [ptr, ec] = std::from_chars(blStr.data(), blStr.data() + blStr.size(), bodyLength);
             if (ec != std::errc{} || expectedLength != bodyLength)
@@ -368,7 +378,7 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
             if (tag != FIELD::CheckSum)
                 TRY_LOG_THROW("Message didn't end in checksum");
-            const auto& checksumRet = ret.getTrailer().getField(FIELD::CheckSum);
+            const auto checksumRet = ret.getTrailer().getField(FIELD::CheckSum);
 
             if (checksumRet != checksumStr.view()) {
                 TRY_LOG_THROW("Invalid checksum: expected " << checksumStr.view() << ", received " << checksumRet);

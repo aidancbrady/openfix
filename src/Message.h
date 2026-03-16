@@ -7,6 +7,8 @@
 #include <map>
 #include <memory>
 #include <sstream>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "Config.h"
@@ -81,9 +83,19 @@ struct GroupSpec
 class FieldMap
 {
 public:
-    const std::string& getField(int tag) const
+    FieldMap() = default;
+
+    // Materializing copy: deep-copies all string_views into owned storage.
+    FieldMap(const FieldMap& other);
+    FieldMap& operator=(const FieldMap& other);
+
+    // Default move is safe: unordered_map move preserves element addresses.
+    FieldMap(FieldMap&&) = default;
+    FieldMap& operator=(FieldMap&&) = default;
+
+    std::string_view getField(int tag) const
     {
-        auto fit = m_fields.find(tag);
+        const auto fit = m_fields.find(tag);
         if (fit != m_fields.end())
             return fit->second;
 
@@ -92,7 +104,7 @@ public:
 
     int getIntField(int tag) const
     {
-        const auto& str = getField(tag);
+        const auto str = getField(tag);
         int val = 0;
         std::from_chars(str.data(), str.data() + str.size(), val);
         return val;
@@ -100,7 +112,7 @@ public:
 
     bool tryGetBool(int tag) const
     {
-        auto it = m_fields.find(tag);
+        const auto it = m_fields.find(tag);
         if (it == m_fields.end())
             return false;
         return it->second == "Y";
@@ -111,13 +123,21 @@ public:
         return m_fields.erase(tag);
     }
 
-    void setField(int tag, std::string value, bool order = true);
+    // Owning setField: copies value into internal storage.
+    // Use for outbound message construction and any case where the
+    // source string may not outlive this FieldMap.
+    void setField(int tag, std::string_view value, bool order = true);
+
+    // Zero-copy setField: stores the view directly without copying.
+    // The caller must guarantee the underlying data outlives this FieldMap.
+    // Used by Dictionary::parse() where views reference the original message text.
+    void setFieldView(int tag, std::string_view value, bool order = true);
 
     void setField(int tag, int value, bool order = true)
     {
         char buf[12];
         const auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), value);
-        setField(tag, std::string(buf, ptr - buf), order);
+        setField(tag, std::string_view(buf, ptr - buf), order);
     }
 
     const auto& getFields() const
@@ -127,41 +147,28 @@ public:
 
     size_t getGroupCount(int tag) const
     {
-        auto it = m_groups.find(tag);
+        const auto it = m_groups.find(tag);
         if (it == m_groups.end())
             return 0;
         return it->second.size();
     }
 
-#define GET_GROUPS                \
-        auto it = m_groups.find(tag); \
-        if (it == m_groups.end())     \
-            throw FieldNotFound(tag); \
+    auto& getGroups(this auto& self, int tag)
+    {
+        auto it = self.m_groups.find(tag);
+        if (it == self.m_groups.end())
+            throw FieldNotFound(tag);
         return it->second;
-
-    std::vector<FieldMap>& getGroups(int tag)
-    {
-        GET_GROUPS
     }
-    const std::vector<FieldMap>& getGroups(int tag) const
-    {
-        GET_GROUPS
-    }
-#undef GET_GROUPS
 
-#define GET_GROUP                                                                \
-        auto& vec = getGroups(tag);                                                  \
-        if (idx >= vec.size())                                                       \
-            throw std::out_of_range("Tried to access group " + std::to_string(tag)   \
-                + " with out-of-bounds index " + std::to_string(idx));               \
+    auto& getGroup(this auto& self, int tag, size_t idx)
+    {
+        auto& vec = self.getGroups(tag);
+        if (idx >= vec.size())
+            throw std::out_of_range("Tried to access group " + std::to_string(tag)
+                + " with out-of-bounds index " + std::to_string(idx));
         return vec[idx];
-
-    FieldMap& getGroup(int tag, size_t idx)
-    {
-        GET_GROUP
     }
-    const FieldMap& getGroup(int tag, size_t idx) const {GET_GROUP}
-#undef GET_GROUP
 
     FieldMap& addGroup(int tag)
     {
@@ -193,6 +200,7 @@ public:
     }
 
     void reserve(size_t n) { m_fields.reserve(n); }
+    void reserveIndex(size_t maxKey) { m_fields.reserveIndex(maxKey); }
 
     void setSpec(std::shared_ptr<GroupSpec> spec)
     {
@@ -214,11 +222,18 @@ public:
     }
 
 private:
-    LinkedHashMap<int, std::string> m_fields;
+    LinkedHashMap<int, std::string_view> m_fields;
+    // Stable storage for owned field values (outbound messages, copies).
+    // Tag-keyed so repeated setField() on the same tag overwrites in-place.
+    // std::unordered_map guarantees reference stability on insert.
+    std::unordered_map<int, std::string> m_ownedStorage;
     HashMapT<int, std::vector<FieldMap>> m_groups;
 
     // if this is a group present in our dictionary, we can reference additional metadata here
     std::shared_ptr<GroupSpec> m_groupSpec;
+
+    // Internal: ordered insertion of a pre-resolved view (already owned or guaranteed-live).
+    void insertFieldView(int tag, std::string_view value, bool order);
 
     friend std::ostream& operator<<(std::ostream&, const FieldMap&);
 };
@@ -258,6 +273,9 @@ public:
 
     std::string toString(bool internal = false) const;
 
+    // Access the raw message text (populated for inbound/parsed messages).
+    const std::string& getSourceText() const { return m_sourceText; }
+
 private:
     void toStream(std::ostream& ostr, char soh_char = EXTERNAL_SOH_CHAR) const;
     std::string serialize(char soh_char) const;
@@ -267,6 +285,11 @@ private:
 
     FieldMap m_body;
 
+    // Owned copy of the raw FIX message for parsed messages.
+    // FieldMap string_views reference into this buffer.
+    std::string m_sourceText;
+
+    friend class Dictionary;
     friend std::ostream& operator<<(std::ostream&, const Message&);
 };
 
