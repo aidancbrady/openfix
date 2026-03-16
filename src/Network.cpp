@@ -762,7 +762,7 @@ void ReaderThread::process()
             // Handle eventfd wakeup: flush pending writes
             if (fd == m_eventFD) {
                 uint64_t val;
-                ::read(m_eventFD, &val, sizeof(val));
+                (void)::read(m_eventFD, &val, sizeof(val));
                 flushWrites();
                 continue;
             }
@@ -934,7 +934,7 @@ void ReaderThread::stop()
 
     // Wake the reader from epoll_wait via eventfd
     uint64_t val = 1;
-    ::write(m_eventFD, &val, sizeof(val));
+    (void)::write(m_eventFD, &val, sizeof(val));
 
     // close open connections
     {
@@ -1156,7 +1156,7 @@ void ReaderThread::queueWrite(int fd, MsgPacket&& msg)
 
     // Wake reader to flush
     uint64_t val = 1;
-    ::write(m_eventFD, &val, sizeof(val));
+    (void)::write(m_eventFD, &val, sizeof(val));
 }
 
 void ReaderThread::flushWrites()
@@ -1317,9 +1317,8 @@ void NetworkHandler::stop()
     disconnect();
 
     // shut down if we're an acceptor
-    if (m_settings.getSessionType() == SessionType::ACCEPTOR) {
+    if (m_settings.getSessionType() == SessionType::ACCEPTOR)
         m_network.removeAcceptor(m_settings);
-    }
 }
 
 void NetworkHandler::setSocketSettings(int fd)

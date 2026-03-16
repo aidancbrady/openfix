@@ -541,7 +541,7 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
                 const std::string componentName = field.attribute("name").as_string();
                 // this must be a completed component; just merge everything in
                 const auto& component = componentMap[componentName];
-                for (const auto entry : component.m_fields) {
+                for (const auto& entry : component.m_fields) {
                     if (!ret->m_fields.insert(entry).second)
                         throw DictionaryParsingError("Multiple references of field in group: " + std::to_string(entry.first));
                     ret->m_fieldOrder.push_back(entry.first);

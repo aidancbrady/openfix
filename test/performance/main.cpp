@@ -22,7 +22,6 @@ int main(int argc, char** argv)
         {"AdminWebsitePort", "0"},
         {"UpdateDelay",      "10"},
         {"InputThreads",     "1"},
-        {"WriterThreads",    "1"},
         {"EpollTimeout",     "10"},
     });
 

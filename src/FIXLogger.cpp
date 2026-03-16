@@ -28,8 +28,8 @@ LoggerHandle FileLogger::createLogger(const SessionSettings& settings)
     auto& msgLogger = *m_writer.createInstance(PlatformSettings::getString(PlatformSettings::LOG_PATH) + "/" + sessionID + ".messages.log", true);
 
     auto evtFunction = [&](const std::string& msg) { evtLogger.write(msg); };
-    auto msgFunction = [&](int64_t epoch_us, bool inbound, const std::string& msg) {
-        msgLogger.writeMessage(epoch_us, inbound, msg);
+    auto msgFunction = [&](int64_t epoch_us, bool inbound, std::string msg) {
+        msgLogger.writeMessage(epoch_us, inbound, std::move(msg));
     };
 
     return createHandle(std::move(evtFunction), std::move(msgFunction));

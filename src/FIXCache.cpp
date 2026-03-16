@@ -10,12 +10,13 @@ MemoryCache::MemoryCache(const SessionSettings& settings, std::shared_ptr<Dictio
 
 void MemoryCache::load()
 {
-    auto data = m_store.load();
+    const auto data = m_store.load();
 
     m_messages.clear();
 
     m_senderSeqNum.store(data.m_senderSeqNum, std::memory_order_release);
     m_targetSeqNum.store(data.m_targetSeqNum, std::memory_order_release);
+    m_seqNumsDirty = false;
 
     // Store wire strings directly — no need to parse on load
     for (auto& [idx, msg] : data.m_messages) {
@@ -30,6 +31,7 @@ void MemoryCache::reset()
 
     m_senderSeqNum.store(0, std::memory_order_release);
     m_targetSeqNum.store(0, std::memory_order_release);
+    m_seqNumsDirty = false;
 
     m_store.reset();
 }
@@ -47,39 +49,46 @@ int MemoryCache::getTargetSeqNum() const
 void MemoryCache::setSenderSeqNum(int num)
 {
     m_senderSeqNum.store(num, std::memory_order_release);
-    m_store.setSenderSeqNum(num);
+    m_seqNumsDirty = true;
 }
 
 void MemoryCache::setTargetSeqNum(int num)
 {
     m_targetSeqNum.store(num, std::memory_order_release);
-    m_store.setTargetSeqNum(num);
+    m_seqNumsDirty = true;
 }
 
 int MemoryCache::nextSenderSeqNum()
 {
     const int next = m_senderSeqNum.fetch_add(1, std::memory_order_acq_rel) + 1;
-    m_store.setSenderSeqNum(next);
+    m_seqNumsDirty = true;
     return next;
 }
 
 int MemoryCache::nextTargetSeqNum()
 {
     const int next = m_targetSeqNum.fetch_add(1, std::memory_order_acq_rel) + 1;
-    m_store.setTargetSeqNum(next);
+    m_seqNumsDirty = true;
     return next;
+}
+
+void MemoryCache::flushSeqNums()
+{
+    if (!m_seqNumsDirty)
+        return;
+    m_seqNumsDirty = false;
+    m_store.setSenderSeqNum(m_senderSeqNum.load(std::memory_order_acquire));
+    m_store.setTargetSeqNum(m_targetSeqNum.load(std::memory_order_acquire));
 }
 
 void MemoryCache::cache(int seqnum, const std::string& wire)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     m_messages[seqnum] = wire;
     m_store.store(seqnum, wire);
 }
 
 void MemoryCache::getMessages(int begin, int end, MessageConsumer consumer) const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_messages.lower_bound(begin);
     for (; it != m_messages.end() && (end == 0 || it->first <= end); ++it) {
         consumer(it->first, m_dictionary->parse(m_settings, it->second));

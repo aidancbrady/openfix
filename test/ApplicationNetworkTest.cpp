@@ -246,7 +246,6 @@ TEST_F(ApplicationNetworkTest, InitiatorReconnectsAfterDisconnect)
     ASSERT_TRUE(waitFor([&] { return init->getTargetSeqNum() >= 2; }, std::chrono::seconds(5)));
 
     acceptorApp.stop();
-    std::filesystem::remove_all("./data");
 
     Application acceptorApp2;
     acceptorApp2.createSession("acc", makeAcceptorSettings(port_, "SERVER", "CLIENT"));

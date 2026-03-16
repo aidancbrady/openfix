@@ -29,6 +29,8 @@ public:
 
     virtual std::map<int, Message>& getInboundQueue() = 0;
 
+    virtual void flushSeqNums() = 0;
+
     virtual void load() = 0;
     virtual void reset() = 0;
 };
@@ -51,6 +53,8 @@ public:
     int nextSenderSeqNum() override;
     int nextTargetSeqNum() override;
 
+    void flushSeqNums() override;
+
     std::map<int, Message>& getInboundQueue() override;
 
     void load() override;
@@ -63,10 +67,11 @@ private:
     std::atomic<int> m_senderSeqNum;
     std::atomic<int> m_targetSeqNum;
 
+    // Dirty flag: seqnums are flushed to store periodically, not per-message
+    bool m_seqNumsDirty = false;
+
     // Wire-only cache: stores serialized FIX strings, re-parsed on demand for resend requests
     std::map<int, std::string> m_messages;
-
-    mutable std::mutex m_mutex;
 
     std::map<int, Message> m_inboundQueue;
 

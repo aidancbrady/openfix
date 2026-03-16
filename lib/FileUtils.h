@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <fstream>
 #include <mutex>
@@ -27,10 +26,10 @@ class FileWriter;
 class WriterInstance
 {
 public:
-    explicit WriterInstance(std::string path, std::condition_variable& cv, bool formatFIXMessages = false)
+    explicit WriterInstance(std::string path, bool formatFIXMessages = false)
         : m_path(std::move(path))
-        , m_cv(cv)
         , m_shouldReset(false)
+        , m_dirty(false)
         , m_formatFIXMessages(formatFIXMessages)
     {
         m_buffer.reserve(BUF_SIZE);
@@ -39,11 +38,12 @@ public:
 
     void write(const std::string& text);
     void writeMessage(int64_t epoch_us, bool inbound, const std::string& msg);
+    void writeMessage(int64_t epoch_us, bool inbound, std::string&& msg);
 
     void reset()
     {
-        m_shouldReset = true;
-        m_cv.notify_one();
+        m_shouldReset.store(true, std::memory_order_release);
+        m_dirty.store(true, std::memory_order_release);
     }
 
 private:
@@ -56,12 +56,11 @@ private:
 
     std::string m_path;
 
-    std::condition_variable& m_cv;
-
     std::vector<LogEntry> m_logEntryQueue;
     std::vector<LogEntry> m_logEntryBuffer;
 
     std::atomic<bool> m_shouldReset;
+    std::atomic<bool> m_dirty;
     bool m_formatFIXMessages;
 
     friend class FileWriter;
@@ -80,13 +79,11 @@ public:
 
 private:
     void process();
+    void flushInstances();
 
     std::thread m_thread;
 
     HashMapT<std::string, std::unique_ptr<WriterInstance>> m_instances;
-
-    std::condition_variable m_cv;
-    std::mutex m_mutex;
 
     std::atomic<bool> m_enabled;
 

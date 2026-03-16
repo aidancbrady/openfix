@@ -39,6 +39,7 @@ void Session::start()
 void Session::stop()
 {
     m_enabled.store(false, std::memory_order_release);
+    m_cache->flushSeqNums();
     m_network->stop();
 }
 
@@ -149,8 +150,10 @@ void Session::internal_send(std::string msg, SendCallback_T callback)
 {
     if (m_network->isConnected()) {
         LOG_DEBUG("Sending outbound FIX message");
-        m_logger.logMessage(msg, Direction::OUTBOUND);
 
+        // move msg into the network packet; logger gets a copy via the const-ref overload
+        // (the msg is also needed by the network send, so we log first then move)
+        m_logger.logMessage(msg, Direction::OUTBOUND);
         m_network->send({std::move(msg), std::move(callback)});
 
         // update our heartbeat monitor as we just sent data
@@ -160,12 +163,16 @@ void Session::internal_send(std::string msg, SendCallback_T callback)
 
 void Session::onNetworkUpdate()
 {
+    if (!m_enabled.load(std::memory_order_acquire))
+        return;
+
     const long now = Utils::getEpochMillis();
     if ((now - m_lastUpdate) < 1)
         return;
     m_lastUpdate = now;
 
     try {
+        m_cache->flushSeqNums();
         internal_update();
     } catch (...) {
         LOG_ERROR("Error during update loop!");
