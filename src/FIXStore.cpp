@@ -31,8 +31,8 @@ void FileStore::stop()
 
 StoreHandle FileStore::createStore(const SessionSettings& settings)
 {
-    std::string sessionID = settings.getString(SessionSettings::SENDER_COMP_ID) + "-" + settings.getString(SessionSettings::TARGET_COMP_ID);
-    std::string path = PlatformSettings::getString(PlatformSettings::DATA_PATH) + "/" + sessionID + ".data";
+    const std::string sessionID = settings.getString(SessionSettings::SENDER_COMP_ID) + "-" + settings.getString(SessionSettings::TARGET_COMP_ID);
+    const std::string path = PlatformSettings::getString(PlatformSettings::DATA_PATH) + "/" + sessionID + ".data";
 
     auto& writer = *m_writer.createInstance(path);
     return createHandle(settings, writer, path);
@@ -44,7 +44,7 @@ void StoreHandle::store(int seqnum, const std::string& msg)
     char hdr[1 + sizeof(seqnum) + sizeof(size_t)];
     hdr[0] = static_cast<char>(WriteType::MSG);
     std::memcpy(hdr + 1, &seqnum, sizeof(seqnum));
-    size_t len = msg.length();
+    const size_t len = msg.length();
     std::memcpy(hdr + 1 + sizeof(seqnum), &len, sizeof(len));
 
     std::string buf;
@@ -113,7 +113,7 @@ SessionData StoreHandle::load()
             std::string msg(length, '\0');
             size_t read = 0;
             while (read < length) {
-                size_t toRead = length - read;
+                const size_t toRead = length - read;
                 if (!storeFile.read(msg.data() + read, toRead))
                     throw FileStoreLoadError("Data file corrupted; unable to read complete message");
                 read += toRead;

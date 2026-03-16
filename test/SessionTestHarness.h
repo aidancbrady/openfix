@@ -26,7 +26,7 @@ constexpr const char* kFixDictionaryPath = "test/FIXDictionary.xml";
 
 inline int getAvailablePort()
 {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         throw std::runtime_error("Failed to create socket for dynamic port allocation");
 
@@ -56,7 +56,7 @@ inline bool waitFor(const std::function<bool()>& condition, std::chrono::millise
     while (std::chrono::steady_clock::now() < deadline) {
         if (condition())
             return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return condition();
 }
@@ -106,9 +106,9 @@ inline std::string buildRawMessage(const std::string& beginString,
     for (const auto& [tag, val] : fields)
         body += std::to_string(tag) + "=" + val + std::string(1, '\x01');
 
-    std::string prefix = "8=" + beginString + "\x01" "9=" + std::to_string(body.size()) + "\x01";
-    std::string full = prefix + body;
-    uint8_t checksum = computeChecksum(full);
+    const std::string prefix = "8=" + beginString + "\x01" "9=" + std::to_string(body.size()) + "\x01";
+    const std::string full = prefix + body;
+    const uint8_t checksum = computeChecksum(full);
     return full + "10=" + std::string(formatChecksum(checksum).view()) + "\x01";
 }
 
@@ -121,7 +121,7 @@ inline std::string buildRawMessageBadChecksum(const std::string& beginString,
     for (const auto& [tag, val] : fields)
         body += std::to_string(tag) + "=" + val + std::string(1, '\x01');
 
-    std::string prefix = "8=" + beginString + "\x01" "9=" + std::to_string(body.size()) + "\x01";
+    const std::string prefix = "8=" + beginString + "\x01" "9=" + std::to_string(body.size()) + "\x01";
     return prefix + body + "10=" + checksumOverride + "\x01";
 }
 
@@ -134,9 +134,9 @@ inline std::string buildRawMessageBadBodyLength(const std::string& beginString,
     for (const auto& [tag, val] : fields)
         body += std::to_string(tag) + "=" + val + std::string(1, '\x01');
 
-    std::string prefix = "8=" + beginString + "\x01" "9=" + std::to_string(bodyLengthOverride) + "\x01";
-    std::string full = prefix + body;
-    uint8_t checksum = computeChecksum(full);
+    const std::string prefix = "8=" + beginString + "\x01" "9=" + std::to_string(bodyLengthOverride) + "\x01";
+    const std::string full = prefix + body;
+    const uint8_t checksum = computeChecksum(full);
     return full + "10=" + std::string(formatChecksum(checksum).view()) + "\x01";
 }
 
@@ -172,12 +172,12 @@ public:
     // Connect with retry, waiting for the acceptor to start listening.
     bool connectWithRetry(int port, std::chrono::milliseconds timeout = std::chrono::seconds(3))
     {
-        auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
         while (std::chrono::steady_clock::now() < deadline) {
             if (connect(port))
                 return true;
             close();
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         return false;
     }
@@ -191,33 +191,33 @@ public:
     // Receive a single complete FIX message (8=...10=xxx\x01).
     std::string receiveMessage(std::chrono::milliseconds timeout = std::chrono::seconds(3))
     {
-        auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
 
         while (std::chrono::steady_clock::now() < deadline) {
             // Search for checksum trailer: \x0110=NNN\x01
             size_t searchStart = 0;
             while (true) {
-                auto pos = m_recvBuf.find("\x01" "10=", searchStart);
+                const auto pos = m_recvBuf.find("\x01" "10=", searchStart);
                 if (pos == std::string::npos || pos + 8 > m_recvBuf.size())
                     break;
                 if (m_recvBuf[pos + 7] == '\x01') {
-                    auto msg = m_recvBuf.substr(0, pos + 8);
+                    const auto msg = m_recvBuf.substr(0, pos + 8);
                     m_recvBuf.erase(0, pos + 8);
                     return msg;
                 }
                 searchStart = pos + 1;
             }
 
-            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
                 deadline - std::chrono::steady_clock::now());
             if (remaining.count() <= 0)
                 break;
 
             pollfd pfd {m_fd, POLLIN, 0};
-            int ret = ::poll(&pfd, 1, std::min<long long>(remaining.count(), 50));
+            const int ret = ::poll(&pfd, 1, std::min<long long>(remaining.count(), 10));
             if (ret > 0) {
                 char buf[4096];
-                ssize_t n = ::recv(m_fd, buf, sizeof(buf), 0);
+                const ssize_t n = ::recv(m_fd, buf, sizeof(buf), 0);
                 if (n <= 0)
                     break;
                 m_recvBuf.append(buf, n);
@@ -270,7 +270,7 @@ public:
                       const std::string& target = "ACCEPTOR",
                       int seqNum = 1, int heartBtInt = 30)
     {
-        auto msg = buildRawMessage("FIX.4.2", {
+        const auto msg = buildRawMessage("FIX.4.2", {
             {35, "A"},
             {49, sender},
             {56, target},
@@ -280,7 +280,7 @@ public:
             {98, "0"},
         });
         sendRaw(msg);
-        auto response = receiveMessage(std::chrono::seconds(3));
+        const auto response = receiveMessage(std::chrono::seconds(3));
         return !response.empty() && response.find("35=A") != std::string::npos;
     }
 
@@ -310,14 +310,14 @@ public:
         HashMapT<int, std::string> result;
         size_t pos = 0;
         while (pos < raw.size()) {
-            auto eq = raw.find('=', pos);
+            const auto eq = raw.find('=', pos);
             if (eq == std::string::npos)
                 break;
             auto soh = raw.find('\x01', eq);
             if (soh == std::string::npos)
                 soh = raw.size();
             try {
-                int tag = std::stoi(raw.substr(pos, eq - pos));
+                const int tag = std::stoi(raw.substr(pos, eq - pos));
                 result[tag] = raw.substr(eq + 1, soh - eq - 1);
             } catch (...) {
             }
@@ -326,18 +326,16 @@ public:
         return result;
     }
 
-    // Receive all complete messages within the timeout window.
+    // Receive all complete messages. Waits up to `timeout` for the first
+    // message, then drains any further messages using a short follow-up
+    // timeout so we don't block for the full window after the last message.
     std::vector<std::string> receiveMessages(std::chrono::milliseconds timeout = std::chrono::seconds(3))
     {
         std::vector<std::string> messages;
-        auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < deadline) {
-            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - std::chrono::steady_clock::now());
-            auto msg = receiveMessage(remaining);
-            if (msg.empty())
-                break;
+        auto msg = receiveMessage(timeout);
+        while (!msg.empty()) {
             messages.push_back(std::move(msg));
+            msg = receiveMessage(std::chrono::milliseconds(200));
         }
         return messages;
     }

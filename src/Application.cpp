@@ -5,7 +5,7 @@
 Application::Application()
     : Application(std::make_shared<FileLogger>(), std::make_shared<FileStore>())
 {
-    int websitePort = PlatformSettings::getLong(PlatformSettings::ADMIN_WEBSITE_PORT);
+    const int websitePort = PlatformSettings::getLong(PlatformSettings::ADMIN_WEBSITE_PORT);
     if (websitePort > 0) {
         m_adminWebsite = std::make_unique<AdminWebsite>(*this, websitePort);
     }
@@ -58,14 +58,15 @@ void Application::stop()
     m_updateThread.join();
 }
 
-void Application::createSession(const std::string& sessionName, const SessionSettings& settings)
+std::shared_ptr<Session> Application::createSession(const std::string& sessionName, const SessionSettings& settings)
 {
     if (m_sessionMap.find(sessionName) != m_sessionMap.end())
         throw std::runtime_error("Session already exists with name: " + sessionName);
 
-    int dispatchHash = static_cast<int>(m_sessionMap.size());
+    const int dispatchHash = static_cast<int>(m_sessionMap.size());
     auto session = std::make_shared<Session>(settings, *m_network, m_logger, m_store, m_dispatcher, dispatchHash);
-    m_sessionMap[sessionName] = std::move(session);
+    m_sessionMap[sessionName] = session;
+    return session;
 }
 
 void Application::runUpdate()

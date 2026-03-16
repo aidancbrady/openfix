@@ -58,14 +58,14 @@ void MemoryCache::setTargetSeqNum(int num)
 
 int MemoryCache::nextSenderSeqNum()
 {
-    int next = m_senderSeqNum.fetch_add(1, std::memory_order_acq_rel) + 1;
+    const int next = m_senderSeqNum.fetch_add(1, std::memory_order_acq_rel) + 1;
     m_store.setSenderSeqNum(next);
     return next;
 }
 
 int MemoryCache::nextTargetSeqNum()
 {
-    int next = m_targetSeqNum.fetch_add(1, std::memory_order_acq_rel) + 1;
+    const int next = m_targetSeqNum.fetch_add(1, std::memory_order_acq_rel) + 1;
     m_store.setTargetSeqNum(next);
     return next;
 }

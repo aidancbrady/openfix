@@ -19,11 +19,11 @@ TEST_F(SessionSequenceResetTest, GapFillSetsNextExpected)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // GapFill: MsgSeqNum=2, NewSeqNo=5
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -51,11 +51,11 @@ TEST_F(SessionSequenceResetTest, GapFillAttemptToLowerTriggersReject)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // GapFill: MsgSeqNum=2, NewSeqNo=1 (attempt to lower)
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -66,7 +66,7 @@ TEST_F(SessionSequenceResetTest, GapFillAttemptToLowerTriggersReject)
     });
     client.sendRaw(msg);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "3");   // reject
@@ -86,11 +86,11 @@ TEST_F(SessionSequenceResetTest, GapFillWithHighSeqNumTriggersResendRequest)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // GapFill with MsgSeqNum=5 (expected 2) -> gap
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -101,7 +101,7 @@ TEST_F(SessionSequenceResetTest, GapFillWithHighSeqNumTriggersResendRequest)
     });
     client.sendRaw(msg);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "2");  // ResendRequest
@@ -123,11 +123,11 @@ TEST_F(SessionSequenceResetTest, ResetSetsNextExpected)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // Reset: NewSeqNo=10
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -154,11 +154,11 @@ TEST_F(SessionSequenceResetTest, ResetToLowerTriggersLogout)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // advance target to 20 via valid reset
-    auto msg1 = buildRawMessage("FIX.4.2", {
+    const auto msg1 = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -170,7 +170,7 @@ TEST_F(SessionSequenceResetTest, ResetToLowerTriggersLogout)
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 20; }, std::chrono::seconds(3)));
 
     // advance target to 50
-    auto msg1b = buildRawMessage("FIX.4.2", {
+    const auto msg1b = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -182,7 +182,7 @@ TEST_F(SessionSequenceResetTest, ResetToLowerTriggersLogout)
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 50; }, std::chrono::seconds(3)));
 
     // reset with NewSeqNo=40 < targetSeqNum=50 -> logout
-    auto msg2 = buildRawMessage("FIX.4.2", {
+    const auto msg2 = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -192,7 +192,7 @@ TEST_F(SessionSequenceResetTest, ResetToLowerTriggersLogout)
     });
     client.sendRaw(msg2);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "5");  // logout
@@ -211,11 +211,11 @@ TEST_F(SessionSequenceResetTest, ResetAcceptedWithLowMsgSeqNum)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // Reset with MsgSeqNum=1 (below expected 2) and NewSeqNo=10
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -242,11 +242,11 @@ TEST_F(SessionSequenceResetTest, GapFillNoAdvanceTriggersReject)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // GapFill where NewSeqNo == MsgSeqNum (no advance)
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "4"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -257,7 +257,7 @@ TEST_F(SessionSequenceResetTest, GapFillNoAdvanceTriggersReject)
     });
     client.sendRaw(msg);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "3");   // reject

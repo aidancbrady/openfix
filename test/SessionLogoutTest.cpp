@@ -14,8 +14,8 @@ TEST_F(SessionLogoutTest, InitiateLogout)
     app.createSession("initiator", makeInitiatorSettings(port_));
     app.start();
 
-    auto initiator = app.getSession("initiator");
-    auto acceptor = app.getSession("acceptor");
+    const auto initiator = app.getSession("initiator");
+    const auto acceptor = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return initiator->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
     ASSERT_TRUE(waitFor([&] { return acceptor->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
 
@@ -38,12 +38,12 @@ TEST_F(SessionLogoutTest, ReceiveUnsolicitedLogout)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     client.sendMessage("5", 2, {{58, "Client shutting down"}});
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "5");  // logout ack
@@ -64,14 +64,14 @@ TEST_F(SessionLogoutTest, LogoutAckTimeout)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 1));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
     ASSERT_TRUE(waitFor([&] { return session->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
 
     client.sendMessage("0", 2);
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 3; }, std::chrono::seconds(3)));
 
-    EXPECT_TRUE(client.waitForDisconnect(std::chrono::seconds(10)));
+    EXPECT_TRUE(client.waitForDisconnect(std::chrono::seconds(5)));
 
     app.stop();
 }
@@ -87,13 +87,13 @@ TEST_F(SessionLogoutTest, LogoutContainsTextReason)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // trigger logout via wrong BeginString
     client.sendMessage("0", 2, {}, "INITIATOR", "ACCEPTOR", "FIX.4.3");
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "5");
@@ -108,7 +108,7 @@ TEST_F(SessionLogoutTest, LogoutDuringTestRequestState)
 {
     auto acceptorSettings = makeAcceptorSettings(port_);
     acceptorSettings.setLong(SessionSettings::HEARTBEAT_INTERVAL, 1);
-    acceptorSettings.setDouble(SessionSettings::TEST_REQUEST_THRESHOLD, 2.0);
+    acceptorSettings.setDouble(SessionSettings::TEST_REQUEST_THRESHOLD, 1.0);
 
     Application app;
     app.createSession("acceptor", acceptorSettings);
@@ -118,23 +118,23 @@ TEST_F(SessionLogoutTest, LogoutDuringTestRequestState)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 1));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
-    // wait for TestRequest (acceptor enters TEST_REQUEST state after 2s inactivity)
+    // wait for TestRequest (acceptor enters TEST_REQUEST state after 1s inactivity)
     std::string testReqID;
     ASSERT_TRUE(waitFor([&] {
-        auto m = client.receiveMessage(std::chrono::milliseconds(200));
+        const auto m = client.receiveMessage(std::chrono::milliseconds(100));
         if (!m.empty()) {
             auto tags = RawFIXClient::parseTags(m);
             if (tags[35] == "1")
                 testReqID = tags[112];
         }
         return !testReqID.empty();
-    }, std::chrono::seconds(5)));
+    }, std::chrono::seconds(3)));
 
     // send Logout while acceptor is in TEST_REQUEST state
-    int nextSeq = session->getTargetSeqNum();
+    const int nextSeq = session->getTargetSeqNum();
     client.sendMessage("5", nextSeq, {{58, "Client shutting down"}});
 
     EXPECT_TRUE(client.waitForDisconnect(std::chrono::seconds(5)));
@@ -150,8 +150,8 @@ TEST_F(SessionLogoutTest, LogoutAckReceivedCleanDisconnect)
     app.createSession("initiator", makeInitiatorSettings(port_));
     app.start();
 
-    auto initiator = app.getSession("initiator");
-    auto acceptor = app.getSession("acceptor");
+    const auto initiator = app.getSession("initiator");
+    const auto acceptor = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return initiator->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
     ASSERT_TRUE(waitFor([&] { return acceptor->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
     ASSERT_TRUE(waitFor([&] { return initiator->getSenderSeqNum() >= 2; }, std::chrono::seconds(3)));

@@ -119,7 +119,7 @@ void Timer::run()
         while (!m_events.empty()) {
             auto it = m_events.begin();
             if (time >= it->first) {
-                for (auto id : it->second) {
+                for (const auto id : it->second) {
                     auto timer_it = m_timers.find(id);
                     if (timer_it != m_timers.end()) {
                         const auto& timer = timer_it->second;
@@ -149,7 +149,7 @@ void Timer::run()
 TimerID Timer::schedule(TimerEvent event, uint64_t delay)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto id = ++m_timerCount;
+    const auto id = ++m_timerCount;
     m_timers.emplace(id, std::move(event));
     m_events[Utils::getEpochMillis() + delay].push_back(id);
     m_cv.notify_one();
@@ -159,7 +159,7 @@ TimerID Timer::schedule(TimerEvent event, uint64_t delay)
 bool Timer::erase(TimerID id)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    bool ret = m_timers.erase(id) > 0;
+    const bool ret = m_timers.erase(id) > 0;
     m_cv.notify_one();
     return ret;
 }

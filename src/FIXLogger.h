@@ -5,6 +5,7 @@
 #include <openfix/Utils.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <fstream>
 #include <functional>
@@ -22,6 +23,7 @@ enum class Direction
 };
 
 using LoggerFunction = std::function<void(const std::string& msg)>;
+using MsgLoggerFunction = std::function<void(int64_t epoch_us, bool inbound, const std::string& msg)>;
 
 class LoggerHandle;
 
@@ -36,7 +38,7 @@ public:
     virtual LoggerHandle createLogger(const SessionSettings& settings) = 0;
 
 protected:
-    LoggerHandle createHandle(LoggerFunction evtLogger, LoggerFunction msgLogger) const;
+    LoggerHandle createHandle(LoggerFunction evtLogger, MsgLoggerFunction msgLogger) const;
 };
 
 class LoggerHandle
@@ -49,18 +51,21 @@ public:
 
     void logMessage(const std::string& msg, Direction dir)
     {
-        auto time = Utils::getUTCTimestampMicros();
-        m_msgLogger(time + " " + (dir == Direction::INBOUND ? "RECV: " : "SENT: ") + msg + "\n");
+        // Capture raw epoch microseconds (~20ns vDSO call).
+        // Timestamp formatting is deferred to the FileWriter thread.
+        const auto epoch_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        m_msgLogger(epoch_us, dir == Direction::INBOUND, msg);
     }
 
 private:
-    LoggerHandle(LoggerFunction evtLogger, LoggerFunction msgLogger)
+    LoggerHandle(LoggerFunction evtLogger, MsgLoggerFunction msgLogger)
         : m_eventLogger(std::move(evtLogger))
         , m_msgLogger(std::move(msgLogger))
     {}
 
     LoggerFunction m_eventLogger;
-    LoggerFunction m_msgLogger;
+    MsgLoggerFunction m_msgLogger;
 
     friend class IFIXLogger;
 };

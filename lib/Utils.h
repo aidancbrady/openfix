@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -63,39 +64,61 @@ struct Utils
     }
 
     // Format UTC timestamp for FIX protocol: YYYYMMDD-HH:MM:SS.sss (millisecond precision)
+    // Uses thread_local cache: gmtime_r + strftime only called once per second.
     inline static std::string getUTCTimestamp()
     {
         auto now = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
-        std::tm utc_time = {};
-        gmtime_r(&time, &utc_time);
+        auto epoch_s = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+
+        thread_local time_t cached_s = 0;
+        thread_local char cached_prefix[18]; // "YYYYMMDD-HH:MM:SS" + null
+
+        if (epoch_s != cached_s) {
+            cached_s = static_cast<time_t>(epoch_s);
+            std::tm utc{};
+            gmtime_r(&cached_s, &utc);
+            std::strftime(cached_prefix, sizeof(cached_prefix), "%Y%m%d-%H:%M:%S", &utc);
+        }
 
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
 
-        // "YYYYMMDD-HH:MM:SS.sss" = 21 chars + null
         char buf[32];
-        std::strftime(buf, sizeof(buf), "%Y%m%d-%H:%M:%S", &utc_time);
+        std::memcpy(buf, cached_prefix, 17);
         std::snprintf(buf + 17, sizeof(buf) - 17, ".%03ld", ms);
 
         return std::string(buf, 21);
     }
 
+    // Format a pre-captured epoch-microsecond timestamp: YYYYMMDD-HH:MM:SS.uuuuuu
+    // Uses thread_local cache: gmtime_r + strftime only called once per second.
+    inline static std::string formatTimestampMicros(int64_t epoch_us)
+    {
+        auto epoch_s = static_cast<time_t>(epoch_us / 1000000);
+        auto us = static_cast<int>(epoch_us % 1000000);
+
+        thread_local time_t cached_s = 0;
+        thread_local char cached_prefix[18];
+
+        if (epoch_s != cached_s) {
+            cached_s = epoch_s;
+            std::tm utc{};
+            gmtime_r(&cached_s, &utc);
+            std::strftime(cached_prefix, sizeof(cached_prefix), "%Y%m%d-%H:%M:%S", &utc);
+        }
+
+        char buf[32];
+        std::memcpy(buf, cached_prefix, 17);
+        std::snprintf(buf + 17, sizeof(buf) - 17, ".%06d", us);
+
+        return std::string(buf, 24);
+    }
+
     // Format UTC timestamp for logging: YYYYMMDD-HH:MM:SS.uuuuuu (microsecond precision)
     inline static std::string getUTCTimestampMicros()
     {
-        auto now = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
-        std::tm utc_time = {};
-        gmtime_r(&time, &utc_time);
-
-        auto us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count() % 1000000;
-
-        // "YYYYMMDD-HH:MM:SS.uuuuuu" = 24 chars + null
-        char buf[32];
-        std::strftime(buf, sizeof(buf), "%Y%m%d-%H:%M:%S", &utc_time);
-        std::snprintf(buf + 17, sizeof(buf) - 17, ".%06ld", us);
-
-        return std::string(buf, 24);
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        return formatTimestampMicros(us);
     }
 
     // Search for a pre-built tag pattern in a FIX message.

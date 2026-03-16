@@ -17,16 +17,16 @@ TEST_F(SessionResendTest, ResendRequestTriggersMessageRecovery)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
-    int acceptorSeqNum = session->getSenderSeqNum();
+    const int acceptorSeqNum = session->getSenderSeqNum();
     EXPECT_GE(acceptorSeqNum, 2);
 
     // request resend from message 1 onwards
     client.sendMessage("2", 2, {{7, "1"}, {16, "0"}});
 
-    auto msgs = client.receiveMessages(std::chrono::seconds(3));
+    const auto msgs = client.receiveMessages(std::chrono::seconds(3));
     ASSERT_FALSE(msgs.empty());
 
     bool foundGapFill = false;
@@ -53,7 +53,7 @@ TEST_F(SessionResendTest, ResendRequestIncrements)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     client.sendMessage("2", 2, {{7, "1"}, {16, "0"}});
@@ -71,8 +71,8 @@ TEST_F(SessionResendTest, BidirectionalMessageRecovery)
     app.createSession("initiator", makeInitiatorSettings(port_));
     app.start();
 
-    auto initiator = app.getSession("initiator");
-    auto acceptor = app.getSession("acceptor");
+    const auto initiator = app.getSession("initiator");
+    const auto acceptor = app.getSession("acceptor");
     ASSERT_NE(initiator, nullptr);
     ASSERT_NE(acceptor, nullptr);
 
@@ -98,12 +98,12 @@ TEST_F(SessionResendTest, RecoveryGapFillsSessionMsgsRetransmitsAppMsgs)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     client.sendMessage("2", 2, {{7, "1"}, {16, "0"}});
 
-    auto msgs = client.receiveMessages(std::chrono::seconds(3));
+    const auto msgs = client.receiveMessages(std::chrono::seconds(3));
     ASSERT_FALSE(msgs.empty());
 
     for (const auto& m : msgs) {
@@ -128,7 +128,7 @@ TEST_F(SessionResendTest, SimultaneousResendRequest)
     ASSERT_TRUE(client.connectWithRetry(port_));
 
     // logon with seqnum=5 to create a gap
-    auto logonMsg = buildRawMessage("FIX.4.2", {
+    const auto logonMsg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -139,12 +139,12 @@ TEST_F(SessionResendTest, SimultaneousResendRequest)
     });
     client.sendRaw(logonMsg);
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
 
     bool gotLogon = false;
     bool gotResendRequest = false;
     ASSERT_TRUE(waitFor([&] {
-        auto m = client.receiveMessage(std::chrono::milliseconds(200));
+        const auto m = client.receiveMessage(std::chrono::milliseconds(200));
         if (!m.empty()) {
             auto tags = RawFIXClient::parseTags(m);
             if (tags[35] == "A")
@@ -160,7 +160,7 @@ TEST_F(SessionResendTest, SimultaneousResendRequest)
 
     bool gotRecovery = false;
     EXPECT_TRUE(waitFor([&] {
-        auto m = client.receiveMessage(std::chrono::milliseconds(200));
+        const auto m = client.receiveMessage(std::chrono::milliseconds(200));
         if (!m.empty())
             gotRecovery = true;
         return gotRecovery;

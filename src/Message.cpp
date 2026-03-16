@@ -11,7 +11,7 @@ const HashSetT<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD
 static void appendInt(std::string& out, int val)
 {
     char buf[12];
-    auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), val);
+    const auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), val);
     out.append(buf, ptr - buf);
 }
 
@@ -67,7 +67,7 @@ std::string Message::serialize(char soh_char) const
     std::string prefix;
     prefix.reserve(32);
     int soh_char_count = 1;  // at least 1 from tag 9
-    auto it = m_header.getFields().find(FIELD::BeginString);
+    const auto it = m_header.getFields().find(FIELD::BeginString);
     if (it != m_header.getFields().end()) {
         appendInt(prefix, FIELD::BeginString);
         prefix += TAG_ASSIGNMENT_CHAR;
@@ -101,7 +101,7 @@ std::string Message::serialize(char soh_char) const
     uint8_t checksum = computeChecksum(result);
     if (soh_char != INTERNAL_SOH_CHAR)
         checksum += static_cast<uint8_t>(soh_char_count * (INTERNAL_SOH_CHAR - soh_char));
-    auto checksumStr = formatChecksum(checksum);
+    const auto checksumStr = formatChecksum(checksum);
 
     appendInt(result, FIELD::CheckSum);
     result += TAG_ASSIGNMENT_CHAR;
@@ -125,7 +125,7 @@ void FieldMap::setField(int tag, std::string value, bool order)
     }
 
     // we care about order; we need to make sure we put this field exactly where it belongs
-    auto& field_order = m_groupSpec->m_fieldOrder;
+    const auto& field_order = m_groupSpec->m_fieldOrder;
     size_t order_ptr = 0;
     auto field_it = m_fields.begin();
 
@@ -160,7 +160,7 @@ void FieldMap::sortFields()
     LinkedHashMap<int, std::string> newFields;
 
     if (m_groupSpec) {
-        for (auto tag : m_groupSpec->m_fieldOrder) {
+        for (const auto tag : m_groupSpec->m_fieldOrder) {
             auto it = m_fields.find(tag);
             if (it != m_fields.end()) {
                 newFields.insert(*it);

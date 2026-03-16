@@ -47,8 +47,8 @@ TEST_F(ApplicationNetworkTest, TwoAcceptorSessionsOnSamePort)
     ASSERT_TRUE(client2.connectWithRetry(port_));
     ASSERT_TRUE(client2.performLogon("CLIENT2", "SERVER2"));
 
-    auto s1 = app.getSession("session1");
-    auto s2 = app.getSession("session2");
+    const auto s1 = app.getSession("session1");
+    const auto s2 = app.getSession("session2");
     EXPECT_TRUE(waitFor([&] { return s1->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
     EXPECT_TRUE(waitFor([&] { return s2->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
@@ -70,8 +70,8 @@ TEST_F(ApplicationNetworkTest, AcceptorRoutesToCorrectSessionByCompID)
     ASSERT_TRUE(client2.connectWithRetry(port_));
     ASSERT_TRUE(client2.performLogon("CLIENT2", "SERVER2"));
 
-    auto s1 = app.getSession("session1");
-    auto s2 = app.getSession("session2");
+    const auto s1 = app.getSession("session1");
+    const auto s2 = app.getSession("session2");
     ASSERT_TRUE(waitFor([&] { return s1->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
     ASSERT_TRUE(waitFor([&] { return s2->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
@@ -92,7 +92,7 @@ TEST_F(ApplicationNetworkTest, UnknownCompIDConnectionRejected)
     RawFIXClient client;
     ASSERT_TRUE(client.connectWithRetry(port_));
 
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "UNKNOWN_SENDER"},
         {56, "UNKNOWN_TARGET"},
@@ -119,12 +119,12 @@ TEST_F(ApplicationNetworkTest, DuplicateConnectionToSameSessionRejected)
     ASSERT_TRUE(client1.connectWithRetry(port_));
     ASSERT_TRUE(client1.performLogon("CLIENT", "SERVER"));
 
-    auto s = app.getSession("session1");
+    const auto s = app.getSession("session1");
     ASSERT_TRUE(waitFor([&] { return s->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     RawFIXClient client2;
     ASSERT_TRUE(client2.connectWithRetry(port_));
-    auto logonMsg = buildRawMessage("FIX.4.2", {
+    const auto logonMsg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "CLIENT"},
         {56, "SERVER"},
@@ -156,13 +156,13 @@ TEST_F(ApplicationNetworkTest, SecondSessionUnaffectedByFirstSessionLogout)
     ASSERT_TRUE(client2.connectWithRetry(port_));
     ASSERT_TRUE(client2.performLogon("CLIENT2", "SERVER2"));
 
-    auto s1 = app.getSession("session1");
-    auto s2 = app.getSession("session2");
+    const auto s1 = app.getSession("session1");
+    const auto s2 = app.getSession("session2");
     ASSERT_TRUE(waitFor([&] { return s1->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
     ASSERT_TRUE(waitFor([&] { return s2->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     client1.sendMessage("5", 2, {}, "CLIENT1", "SERVER1");
-    auto response = client1.receiveMessage(std::chrono::seconds(3));
+    const auto response = client1.receiveMessage(std::chrono::seconds(3));
     EXPECT_FALSE(response.empty());
 
     client2.sendMessage("0", 2, {}, "CLIENT2", "SERVER2");
@@ -187,10 +187,10 @@ TEST_F(ApplicationNetworkTest, AcceptorAndInitiatorInSameApplication)
     app1.start();
     app2.start();
 
-    auto a1_acc = app1.getSession("acc");
-    auto a1_init = app1.getSession("init");
-    auto a2_acc = app2.getSession("acc");
-    auto a2_init = app2.getSession("init");
+    const auto a1_acc = app1.getSession("acc");
+    const auto a1_init = app1.getSession("init");
+    const auto a2_acc = app2.getSession("acc");
+    const auto a2_init = app2.getSession("init");
 
     EXPECT_TRUE(waitFor([&] { return a1_acc->getTargetSeqNum() >= 2; }, std::chrono::seconds(5)));
     EXPECT_TRUE(waitFor([&] { return a2_acc->getTargetSeqNum() >= 2; }, std::chrono::seconds(5)));
@@ -214,10 +214,10 @@ TEST_F(ApplicationNetworkTest, MultipleInitiatorSessions)
     initiatorApp.createSession("init2", makeInitiatorSettings(port2_, "CLIENT2", "SERVER2"));
     initiatorApp.start();
 
-    auto acc1 = acceptorApp.getSession("acc1");
-    auto acc2 = acceptorApp.getSession("acc2");
-    auto init1 = initiatorApp.getSession("init1");
-    auto init2 = initiatorApp.getSession("init2");
+    const auto acc1 = acceptorApp.getSession("acc1");
+    const auto acc2 = acceptorApp.getSession("acc2");
+    const auto init1 = initiatorApp.getSession("init1");
+    const auto init2 = initiatorApp.getSession("init2");
 
     EXPECT_TRUE(waitFor([&] { return acc1->getTargetSeqNum() >= 2; }, std::chrono::seconds(5)));
     EXPECT_TRUE(waitFor([&] { return acc2->getTargetSeqNum() >= 2; }, std::chrono::seconds(5)));
@@ -240,7 +240,7 @@ TEST_F(ApplicationNetworkTest, InitiatorReconnectsAfterDisconnect)
     initiatorApp.start();
 
     auto acc = acceptorApp.getSession("acc");
-    auto init = initiatorApp.getSession("init");
+    const auto init = initiatorApp.getSession("init");
 
     ASSERT_TRUE(waitFor([&] { return acc->getTargetSeqNum() >= 2; }, std::chrono::seconds(5)));
     ASSERT_TRUE(waitFor([&] { return init->getTargetSeqNum() >= 2; }, std::chrono::seconds(5)));
@@ -277,8 +277,8 @@ TEST_F(ApplicationNetworkTest, StopApplicationDisconnectsAllSessions)
     ASSERT_TRUE(client2.connectWithRetry(port_));
     ASSERT_TRUE(client2.performLogon("CLIENT2", "SERVER2"));
 
-    auto s1 = app.getSession("session1");
-    auto s2 = app.getSession("session2");
+    const auto s1 = app.getSession("session1");
+    const auto s2 = app.getSession("session2");
     ASSERT_TRUE(waitFor([&] { return s1->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
     ASSERT_TRUE(waitFor([&] { return s2->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
@@ -307,7 +307,7 @@ TEST_F(ApplicationNetworkTest, MissingSenderCompIDClosesConnection)
     RawFIXClient client;
     ASSERT_TRUE(client.connectWithRetry(port_));
 
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {56, "SERVER"},
         {34, "1"},
@@ -332,7 +332,7 @@ TEST_F(ApplicationNetworkTest, MissingTargetCompIDClosesConnection)
     RawFIXClient client;
     ASSERT_TRUE(client.connectWithRetry(port_));
 
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "CLIENT"},
         {34, "1"},

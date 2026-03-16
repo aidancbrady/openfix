@@ -155,7 +155,7 @@ std::string htmlEscape(const std::string& s)
 {
     std::string out;
     out.reserve(s.size());
-    for (char c : s) {
+    for (const char c : s) {
         switch (c) {
             case '&': out += "&amp;";  break;
             case '<': out += "&lt;";   break;
@@ -201,7 +201,7 @@ std::string stateToBadgeClass(SessionState s)
 std::string sessionTypeString(const SessionSettings& settings)
 {
     try {
-        auto t = settings.getSessionType();
+        const auto t = settings.getSessionType();
         if (t == SessionType::INITIATOR) return "Initiator";
         if (t == SessionType::ACCEPTOR)  return "Acceptor";
     } catch (...) {}
@@ -222,7 +222,7 @@ std::vector<std::string> readLogTail(const std::string& path, int maxLines, cons
     if (!file.is_open())
         return {};
 
-    auto fileSize = file.tellg();
+    const auto fileSize = file.tellg();
     if (fileSize == 0)
         return {};
 
@@ -332,9 +332,9 @@ void AdminWebsite::start()
 
             for (auto& [name, session] : m_app.m_sessionMap) {
                 const auto& settings = session->getSettings();
-                auto state = session->getState();
-                bool connected = session->getNetwork()->isConnected();
-                bool enabled   = session->isEnabled();
+                const auto state = session->getState();
+                const bool connected = session->getNetwork()->isConnected();
+                const bool enabled   = session->isEnabled();
 
                 body << "<tr>"
                      << "<td><a href=\"/session/" << htmlEscape(name) << "\">" << htmlEscape(name) << "</a></td>"
@@ -367,15 +367,15 @@ void AdminWebsite::start()
 
         auto& session = *it->second;
         const auto& settings = session.getSettings();
-        auto state     = session.getState();
-        bool connected = session.getNetwork()->isConnected();
-        bool enabled   = session.isEnabled();
-        std::string enc = htmlEscape(name);
+        const auto state     = session.getState();
+        const bool connected = session.getNetwork()->isConnected();
+        const bool enabled   = session.isEnabled();
+        const std::string enc = htmlEscape(name);
 
         std::ostringstream body;
 
         // Nav
-        std::string nav = "<span class=\"breadcrumb\"><a href=\"/\">Dashboard</a> &rsaquo; " + enc + "</span>";
+        const std::string nav = "<span class=\"breadcrumb\"><a href=\"/\">Dashboard</a> &rsaquo; " + enc + "</span>";
 
         // Status card
         body << "<div class=\"page-title\">" << enc << "</div>";
@@ -506,7 +506,7 @@ void AdminWebsite::start()
         [this](const crow::request& req, crow::response& res, std::string name) {
             auto it = m_app.m_sessionMap.find(name);
             if (it != m_app.m_sessionMap.end()) {
-                auto params = parseFormBody(req.body);
+                const auto params = parseFormBody(req.body);
                 auto& session = *it->second;
                 auto sit = params.find("sender");
                 if (sit != params.end() && !sit->second.empty()) {
@@ -532,19 +532,19 @@ void AdminWebsite::start()
         }
 
         auto& session = *it->second;
-        std::string enc = htmlEscape(name);
+        const std::string enc = htmlEscape(name);
 
-        char* tail_p   = req.url_params.get("tail");
-        char* filter_p = req.url_params.get("filter");
+        const char* tail_p   = req.url_params.get("tail");
+        const char* filter_p = req.url_params.get("filter");
         int tail       = tail_p   ? std::atoi(tail_p)   : 200;
         std::string filter = filter_p ? filter_p : "";
 
         if (tail <= 0 || tail > 5000) tail = 200;
 
-        std::string logPath = getLogBase(session) + ".messages.log";
-        auto lines = readLogTail(logPath, tail, filter);
+        const std::string logPath = getLogBase(session) + ".messages.log";
+        const auto lines = readLogTail(logPath, tail, filter);
 
-        std::string nav = std::string("<span class=\"breadcrumb\"><a href=\"/\">Dashboard</a> &rsaquo; ")
+        const std::string nav = std::string("<span class=\"breadcrumb\"><a href=\"/\">Dashboard</a> &rsaquo; ")
                         + "<a href=\"/session/" + enc + "\">" + enc + "</a>"
                         + " &rsaquo; Message Log</span>";
 
@@ -575,16 +575,16 @@ void AdminWebsite::start()
             body << "<span class=\"empty\">No log entries found.</span>";
         } else {
             for (const auto& line : lines) {
-                bool isSent = line.find(" SENT: ") != std::string::npos;
-                bool isRecv = line.find(" RECV: ") != std::string::npos;
-                std::string cls = isSent ? "log-sent" : (isRecv ? "log-recv" : "");
+                const bool isSent = line.find(" SENT: ") != std::string::npos;
+                const bool isRecv = line.find(" RECV: ") != std::string::npos;
+                const std::string cls = isSent ? "log-sent" : (isRecv ? "log-recv" : "");
 
                 body << "<div class=\"log-line " << cls << "\">";
                 if (isSent || isRecv) {
                     // Split: "TIMESTAMP SENT: FIXMSG"
-                    auto dirPos = line.find(isSent ? " SENT: " : " RECV: ");
-                    std::string ts  = line.substr(0, dirPos);
-                    std::string msg = line.substr(dirPos + 7);
+                    const auto dirPos = line.find(isSent ? " SENT: " : " RECV: ");
+                    const std::string ts  = line.substr(0, dirPos);
+                    const std::string msg = line.substr(dirPos + 7);
                     body << "<span style=\"color:#555\">" << htmlEscape(ts) << "</span> "
                          << "<span class=\"dir-badge " << (isSent ? "dir-sent" : "dir-recv") << "\">"
                          << (isSent ? "SENT" : "RECV") << "</span>"
@@ -613,16 +613,16 @@ void AdminWebsite::start()
         }
 
         auto& session = *it->second;
-        std::string enc = htmlEscape(name);
+        const std::string enc = htmlEscape(name);
 
-        char* tail_p = req.url_params.get("tail");
+        const char* tail_p = req.url_params.get("tail");
         int tail     = tail_p ? std::atoi(tail_p) : 200;
         if (tail <= 0 || tail > 5000) tail = 200;
 
-        std::string logPath = getLogBase(session) + ".event.log";
-        auto lines = readLogTail(logPath, tail, "");
+        const std::string logPath = getLogBase(session) + ".event.log";
+        const auto lines = readLogTail(logPath, tail, "");
 
-        std::string nav = std::string("<span class=\"breadcrumb\"><a href=\"/\">Dashboard</a> &rsaquo; ")
+        const std::string nav = std::string("<span class=\"breadcrumb\"><a href=\"/\">Dashboard</a> &rsaquo; ")
                         + "<a href=\"/session/" + enc + "\">" + enc + "</a>"
                         + " &rsaquo; Event Log</span>";
 

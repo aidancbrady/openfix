@@ -116,7 +116,7 @@ public:
     void setField(int tag, int value, bool order = true)
     {
         char buf[12];
-        auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), value);
+        const auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), value);
         setField(tag, std::string(buf, ptr - buf), order);
     }
 

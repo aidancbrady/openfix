@@ -2,13 +2,22 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "Log.h"
 #include "Types.h"
+
+struct LogEntry
+{
+    int64_t epoch_us;
+    bool inbound;
+    std::string msg;
+};
 
 // 1KB write buffer
 #define BUF_SIZE 1024
@@ -29,6 +38,7 @@ public:
     }
 
     void write(const std::string& text);
+    void writeMessage(int64_t epoch_us, bool inbound, const std::string& msg);
 
     void reset()
     {
@@ -47,6 +57,9 @@ private:
     std::string m_path;
 
     std::condition_variable& m_cv;
+
+    std::vector<LogEntry> m_logEntryQueue;
+    std::vector<LogEntry> m_logEntryBuffer;
 
     std::atomic<bool> m_shouldReset;
     bool m_formatFIXMessages;

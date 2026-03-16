@@ -57,7 +57,7 @@ TEST_F(MessageTest, SimpleTest)
     SessionSettings settings;
     std::string fix = "8=FIX.4.2|9=42|35=R|131=TES1|146=2|55=AAPL|55=TSLA|11=ID|10=190|";
     auto msg = dict->parse(settings, convert(fix));
-    std::string text = msg.toString();
+    const std::string text = msg.toString();
     EXPECT_EQ(text, fix);
     EXPECT_EQ(msg.getBody().getField(11), "ID");
     EXPECT_EQ(msg.getBody().getGroup(146, 0).getField(55), "AAPL");
@@ -68,15 +68,15 @@ TEST_F(MessageTest, OrderedFields)
     SessionSettings settings;
     settings.setBool(SessionSettings::RELAXED_PARSING, true);
     std::string fix = "34=3|56=TARGET|49=SENDER|35=0|11=TEST|13=TEST|12=TEST|";
-    std::string ordered = "9=54|35=0|49=SENDER|56=TARGET|34=3|11=TEST|13=TEST|12=TEST|10=013|";
-    auto msg = dict->parse(settings, convert(fix));
+    const std::string ordered = "9=54|35=0|49=SENDER|56=TARGET|34=3|11=TEST|13=TEST|12=TEST|10=013|";
+    const auto msg = dict->parse(settings, convert(fix));
     EXPECT_EQ(msg.toString(), ordered);
 }
 
 TEST_F(MessageTest, TimeStampConverter)
 {
-    auto time = "20240330-12:00:00.123";
-    auto ms = Utils::parseUTCTimestamp(time);
+    const auto time = "20240330-12:00:00.123";
+    const auto ms = Utils::parseUTCTimestamp(time);
     EXPECT_EQ(ms, 1711800000123ul);
 }
 

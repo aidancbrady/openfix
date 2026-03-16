@@ -33,7 +33,7 @@ TEST_F(TLSTest, ConnectsWithTrustedServerCertificate)
     app.createSession("initiator", initiator);
     app.start();
 
-    auto initiatorSession = app.getSession("initiator");
+    const auto initiatorSession = app.getSession("initiator");
     ASSERT_NE(initiatorSession, nullptr);
     EXPECT_TRUE(waitFor([&]() { return initiatorSession->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
 
@@ -58,9 +58,9 @@ TEST_F(TLSTest, FailsWhenServerCertificateIsUntrusted)
     app.createSession("initiator", initiator);
     app.start();
 
-    auto initiatorSession = app.getSession("initiator");
+    const auto initiatorSession = app.getSession("initiator");
     ASSERT_NE(initiatorSession, nullptr);
-    EXPECT_FALSE(waitFor([&]() { return initiatorSession->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
+    EXPECT_FALSE(waitFor([&]() { return initiatorSession->getTargetSeqNum() >= 2; }, std::chrono::seconds(1)));
 
     app.stop();
 }
@@ -86,9 +86,9 @@ TEST_F(TLSTest, FailsWhenClientCertificateIsRequiredButMissing)
     app.createSession("initiator", initiator);
     app.start();
 
-    auto initiatorSession = app.getSession("initiator");
+    const auto initiatorSession = app.getSession("initiator");
     ASSERT_NE(initiatorSession, nullptr);
-    EXPECT_FALSE(waitFor([&]() { return initiatorSession->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
+    EXPECT_FALSE(waitFor([&]() { return initiatorSession->getTargetSeqNum() >= 2; }, std::chrono::seconds(1)));
 
     app.stop();
 }
@@ -115,7 +115,7 @@ TEST_F(TLSTest, ConnectsWithMutualTLSWhenClientCertificateProvided)
     app.createSession("initiator", initiator);
     app.start();
 
-    auto initiatorSession = app.getSession("initiator");
+    const auto initiatorSession = app.getSession("initiator");
     ASSERT_NE(initiatorSession, nullptr);
     EXPECT_TRUE(waitFor([&]() { return initiatorSession->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
 

@@ -198,7 +198,7 @@ struct PlatformSettings : StaticConfig<PlatformSettings>
     static inline ConfigItem<long> READER_THREADS = createLong("InputThreads", 1L);
     static inline ConfigItem<long> WRITER_THREADS = createLong("WriterThreads", 1L);
     static inline ConfigItem<long> DISPATCHER_THREADS = createLong("DispatcherThreads", 1L);
-    static inline ConfigItem<bool> DISPATCHER_SPIN = createBool("DispatcherSpin", false);
+    static inline ConfigItem<bool> DISPATCHER_SPIN = createBool("DispatcherSpin", true);
 
     static inline ConfigItem<long> SOCKET_SEND_BUF_SIZE = createLong("SocketSendBufSize");
     static inline ConfigItem<long> SOCKET_RECV_BUF_SIZE = createLong("SocketRecvBufSize");
@@ -265,7 +265,7 @@ struct SessionSettings : Config<SessionSettings>
 
     SessionType getSessionType() const
     {
-        std::string tmp = getString(SESSION_TYPE_STR);
+        const std::string tmp = getString(SESSION_TYPE_STR);
         if (strcasecmp(tmp.c_str(), "initiator") == 0)
             return SessionType::INITIATOR;
         else if (strcasecmp(tmp.c_str(), "acceptor") == 0)

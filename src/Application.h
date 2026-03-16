@@ -11,10 +11,6 @@
 #include "Session.h"
 #include "lib/Dispatcher.h"
 
-struct ApplicationDelegate
-{
-};
-
 class Application
 {
 public:
@@ -23,16 +19,11 @@ public:
 
     virtual ~Application();
 
-    void setDelegate(std::shared_ptr<ApplicationDelegate> delegate)
-    {
-        m_delegate = delegate;
-    }
-
-    void createSession(const std::string& sessionName, const SessionSettings& settings);
+    std::shared_ptr<Session> createSession(const std::string& sessionName, const SessionSettings& settings);
 
     std::shared_ptr<Session> getSession(const std::string& sessionName)
     {
-        auto it = m_sessionMap.find(sessionName);
+        const auto it = m_sessionMap.find(sessionName);
         if (it == m_sessionMap.end())
             return nullptr;
         return it->second;
@@ -58,8 +49,6 @@ private:
     HashMapT<std::string, std::shared_ptr<Session>> m_sessionMap;
 
     std::unique_ptr<AdminWebsite> m_adminWebsite;
-
-    std::weak_ptr<ApplicationDelegate> m_delegate;
 
     friend class AdminWebsite;
 

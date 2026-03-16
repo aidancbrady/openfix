@@ -19,7 +19,7 @@ TEST_F(SessionPersistenceTest, SequenceNumbersPersistAcrossRestart)
         ASSERT_TRUE(client.connectWithRetry(port_));
         ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-        auto session = app.getSession("acceptor");
+        const auto session = app.getSession("acceptor");
         ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
         client.sendMessage("0", 2);
@@ -36,7 +36,7 @@ TEST_F(SessionPersistenceTest, SequenceNumbersPersistAcrossRestart)
         app.createSession("acceptor", makeAcceptorSettings(port_));
         app.start();
 
-        auto session = app.getSession("acceptor");
+        const auto session = app.getSession("acceptor");
         EXPECT_GE(session->getTargetSeqNum(), 4);
         EXPECT_GE(session->getSenderSeqNum(), 2);
 
@@ -59,7 +59,7 @@ TEST_F(SessionPersistenceTest, CachedMessagesAvailableAfterRestart)
         ASSERT_TRUE(client.connectWithRetry(port_));
         ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-        auto session = app.getSession("acceptor");
+        const auto session = app.getSession("acceptor");
         ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
         acceptorSenderSeqNum = session->getSenderSeqNum();
         EXPECT_GE(acceptorSenderSeqNum, 2);
@@ -77,13 +77,13 @@ TEST_F(SessionPersistenceTest, CachedMessagesAvailableAfterRestart)
         ASSERT_TRUE(client.connectWithRetry(port_));
         ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 2, 30));
 
-        auto session = app.getSession("acceptor");
+        const auto session = app.getSession("acceptor");
         ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 3; }, std::chrono::seconds(3)));
 
         // request resend of message 1 (the original logon ack from phase 1)
         client.sendMessage("2", 3, {{7, "1"}, {16, "0"}});
 
-        auto msgs = client.receiveMessages(std::chrono::seconds(3));
+        const auto msgs = client.receiveMessages(std::chrono::seconds(3));
         ASSERT_FALSE(msgs.empty());
 
         bool gotRecovery = false;
@@ -111,7 +111,7 @@ TEST_F(SessionPersistenceTest, NextExpectedMsgSeqNumTriggersRecovery)
     RawFIXClient client;
     ASSERT_TRUE(client.connectWithRetry(port_));
 
-    auto logonMsg = buildRawMessage("FIX.4.2", {
+    const auto logonMsg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -122,9 +122,9 @@ TEST_F(SessionPersistenceTest, NextExpectedMsgSeqNumTriggersRecovery)
     });
     client.sendRaw(logonMsg);
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto logonTags = RawFIXClient::parseTags(response);
     EXPECT_EQ(logonTags[35], "A");
@@ -140,7 +140,7 @@ TEST_F(SessionPersistenceTest, NextExpectedMsgSeqNumTriggersRecovery)
     ASSERT_TRUE(client2.connectWithRetry(port_));
 
     // logon with NextExpectedMsgSeqNum=1 (behind acceptor's sender seqnum)
-    auto logon2 = buildRawMessage("FIX.4.2", {
+    const auto logon2 = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -155,7 +155,7 @@ TEST_F(SessionPersistenceTest, NextExpectedMsgSeqNumTriggersRecovery)
     bool gotLogon = false;
     bool gotRecovery = false;
     EXPECT_TRUE(waitFor([&] {
-        auto m = client2.receiveMessage(std::chrono::milliseconds(200));
+        const auto m = client2.receiveMessage(std::chrono::milliseconds(200));
         if (!m.empty()) {
             auto tags = RawFIXClient::parseTags(m);
             if (tags[35] == "A")
@@ -185,7 +185,7 @@ TEST_F(SessionPersistenceTest, NextExpectedMsgSeqNumEqualsNoRecovery)
     ASSERT_TRUE(client.connectWithRetry(port_));
 
     // NextExpectedMsgSeqNum=1 matches acceptor's sender seqnum
-    auto logonMsg = buildRawMessage("FIX.4.2", {
+    const auto logonMsg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -197,13 +197,13 @@ TEST_F(SessionPersistenceTest, NextExpectedMsgSeqNumEqualsNoRecovery)
     });
     client.sendRaw(logonMsg);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "A");
 
     // no recovery messages should follow
-    auto extra = client.receiveMessage(std::chrono::milliseconds(500));
+    const auto extra = client.receiveMessage(std::chrono::milliseconds(200));
     if (!extra.empty()) {
         auto extraTags = RawFIXClient::parseTags(extra);
         EXPECT_NE(extraTags[35], "4");
@@ -226,7 +226,7 @@ TEST_F(SessionPersistenceTest, NextExpectedMsgSeqNumTooHighTriggersLogout)
     ASSERT_TRUE(client.connectWithRetry(port_));
 
     // NextExpectedMsgSeqNum=100 (way higher than acceptor's sender seqnum of 1)
-    auto logonMsg = buildRawMessage("FIX.4.2", {
+    const auto logonMsg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -238,7 +238,7 @@ TEST_F(SessionPersistenceTest, NextExpectedMsgSeqNumTooHighTriggersLogout)
     });
     client.sendRaw(logonMsg);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "5");  // logout

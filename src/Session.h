@@ -25,14 +25,15 @@ enum class SessionState
     LOGOUT
 };
 
+class Session;
+
 struct SessionDelegate
 {
-    ~SessionDelegate() = default;
+    virtual ~SessionDelegate() = default;
 
-    virtual void onMessage(const Message& msg) const {};
-
-    virtual void onLogon() const {};
-    virtual void onLogout() const {};
+    virtual void onMessage(Session& session, const Message& msg) {}
+    virtual void onLogon(Session& session) {}
+    virtual void onLogout(Session& session) {}
 };
 
 class Session
@@ -44,11 +45,6 @@ public:
 
     void start();
     void stop();
-
-    bool isEnabled()
-    {
-        return m_enabled.load();
-    }
 
     void setDelegate(std::shared_ptr<SessionDelegate> delegate)
     {
@@ -92,6 +88,11 @@ public:
     }
 
     void runUpdate();
+
+    Message createMessage(const std::string& msgType) const
+    {
+        return m_dictionary->create(msgType);
+    }
 
     void send(Message& msg, SendCallback_T callback = SendCallback_T());
 

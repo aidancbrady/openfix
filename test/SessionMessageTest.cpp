@@ -16,7 +16,7 @@ TEST_F(SessionMessageTest, MsgSeqNumAsExpectedIsAccepted)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     client.sendMessage("0", 2);
@@ -37,13 +37,13 @@ TEST_F(SessionMessageTest, MsgSeqNumTooHighTriggersResendRequest)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // send heartbeat with MsgSeqNum=10 (expected 2)
     client.sendMessage("0", 10);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "2");   // ResendRequest
@@ -64,13 +64,13 @@ TEST_F(SessionMessageTest, MsgSeqNumTooLowTriggersLogout)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // MsgSeqNum=1, expected 2
     client.sendMessage("0", 1);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "5");  // logout
@@ -90,12 +90,12 @@ TEST_F(SessionMessageTest, BeginStringMismatchTriggersLogout)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     client.sendMessage("0", 2, {}, "INITIATOR", "ACCEPTOR", "FIX.4.3");
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "5");  // logout
@@ -116,12 +116,12 @@ TEST_F(SessionMessageTest, CompIDMismatchTriggersLogout)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     client.sendMessage("0", 2, {}, "WRONG_SENDER", "ACCEPTOR");
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "5");  // logout
@@ -145,10 +145,10 @@ TEST_F(SessionMessageTest, SendingTimeOutsideThresholdTriggersReject)
     // before the session terminates the connection.
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getState() == SessionState::READY; }, std::chrono::seconds(3)));
 
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "0"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -160,7 +160,7 @@ TEST_F(SessionMessageTest, SendingTimeOutsideThresholdTriggersReject)
     bool foundReject = false;
     bool foundLogout = false;
     EXPECT_TRUE(waitFor([&] {
-        auto m = client.receiveMessage(std::chrono::milliseconds(200));
+        const auto m = client.receiveMessage(std::chrono::milliseconds(200));
         if (!m.empty()) {
             auto tags = RawFIXClient::parseTags(m);
             if (tags[35] == "3") {
@@ -189,10 +189,10 @@ TEST_F(SessionMessageTest, PossDupWithoutOrigSendingTimeTriggersReject)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "0"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -202,7 +202,7 @@ TEST_F(SessionMessageTest, PossDupWithoutOrigSendingTimeTriggersReject)
     });
     client.sendRaw(msg);
 
-    auto response = client.receiveMessage();
+    const auto response = client.receiveMessage();
     ASSERT_FALSE(response.empty());
     auto tags = RawFIXClient::parseTags(response);
     EXPECT_EQ(tags[35], "3");   // reject
@@ -222,12 +222,12 @@ TEST_F(SessionMessageTest, InvalidChecksumIgnored)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
-    int seqBefore = session->getTargetSeqNum();
+    const int seqBefore = session->getTargetSeqNum();
 
-    auto msg = buildRawMessageBadChecksum("FIX.4.2", {
+    const auto msg = buildRawMessageBadChecksum("FIX.4.2", {
         {35, "0"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -236,7 +236,7 @@ TEST_F(SessionMessageTest, InvalidChecksumIgnored)
     }, "000");
     client.sendRaw(msg);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     EXPECT_EQ(session->getTargetSeqNum(), seqBefore);
     EXPECT_TRUE(session->getNetwork()->isConnected());
@@ -255,7 +255,7 @@ TEST_F(SessionMessageTest, RejectMessageIncrements)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     client.sendMessage("3", 2, {{45, "1"}, {373, "0"}});
@@ -277,12 +277,12 @@ TEST_F(SessionMessageTest, InvalidBodyLengthIgnored)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon());
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
-    int seqBefore = session->getTargetSeqNum();
+    const int seqBefore = session->getTargetSeqNum();
 
-    auto msg = buildRawMessageBadBodyLength("FIX.4.2", {
+    const auto msg = buildRawMessageBadBodyLength("FIX.4.2", {
         {35, "0"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -310,11 +310,11 @@ TEST_F(SessionMessageTest, RejectContainsProperFields)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 1));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
     // trigger reject via SendingTime outside threshold
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "0"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -325,7 +325,7 @@ TEST_F(SessionMessageTest, RejectContainsProperFields)
 
     bool foundReject = false;
     EXPECT_TRUE(waitFor([&] {
-        auto m = client.receiveMessage(std::chrono::milliseconds(200));
+        const auto m = client.receiveMessage(std::chrono::milliseconds(200));
         if (!m.empty()) {
             auto tags = RawFIXClient::parseTags(m);
             if (tags[35] == "3") {
@@ -352,10 +352,10 @@ TEST_F(SessionMessageTest, PossDupWithExpectedSeqNumAccepted)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "0"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -383,10 +383,10 @@ TEST_F(SessionMessageTest, LogonWhileReadyTriggersLogout)
     ASSERT_TRUE(client.connectWithRetry(port_));
     ASSERT_TRUE(client.performLogon("INITIATOR", "ACCEPTOR", 1, 30));
 
-    auto session = app.getSession("acceptor");
+    const auto session = app.getSession("acceptor");
     ASSERT_TRUE(waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(3)));
 
-    auto logonMsg = buildRawMessage("FIX.4.2", {
+    const auto logonMsg = buildRawMessage("FIX.4.2", {
         {35, "A"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},
@@ -397,7 +397,7 @@ TEST_F(SessionMessageTest, LogonWhileReadyTriggersLogout)
     });
     client.sendRaw(logonMsg);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     EXPECT_TRUE(session->getNetwork()->isConnected());
 
     app.stop();
@@ -413,7 +413,7 @@ TEST_F(SessionMessageTest, NonLogonDuringLogonStateTriggersLogout)
     RawFIXClient client;
     ASSERT_TRUE(client.connectWithRetry(port_));
 
-    auto msg = buildRawMessage("FIX.4.2", {
+    const auto msg = buildRawMessage("FIX.4.2", {
         {35, "0"},
         {49, "INITIATOR"},
         {56, "ACCEPTOR"},

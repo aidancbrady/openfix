@@ -48,7 +48,7 @@ Network::Network()
 
 bool try_make_non_blocking(int fd)
 {
-    int flags = fcntl(fd, F_GETFL, 0);
+    const int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) {
         LOG_ERROR("NetUtils", "Error getting flags from socket: " << strerror(errno));
         return false;
@@ -64,7 +64,7 @@ bool try_make_non_blocking(int fd)
 
 bool set_sock_opt(int fd, int family, int optname, bool enable = true)
 {
-    int enable_flag = enable ? 1 : 0;
+    const int enable_flag = enable ? 1 : 0;
     if (setsockopt(fd, family, optname, &enable_flag, sizeof(enable_flag)) < 0) {
         LOG_ERROR("NetUtils", "Failed to set socket option " << optname << ": " << std::string(strerror(errno)));
         return false;
@@ -79,7 +79,7 @@ bool is_tls_enabled(const SessionSettings& settings)
 
 std::string get_ssl_error()
 {
-    unsigned long err = ERR_get_error();
+    const unsigned long err = ERR_get_error();
     if (err == 0)
         return "unknown SSL error";
     char buf[256];
@@ -161,8 +161,8 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
     if (!m_running.load(std::memory_order_acquire))
         return false;
 
-    std::string hostname = settings.getString(SessionSettings::CONNECT_HOST);
-    int port = settings.getLong(SessionSettings::CONNECT_PORT);
+    const std::string hostname = settings.getString(SessionSettings::CONNECT_HOST);
+    const int port = settings.getLong(SessionSettings::CONNECT_PORT);
 
     int fd = 0;
 
@@ -181,7 +181,7 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
         return false;
     }
 
-    long timeout = settings.getLong(SessionSettings::CONNECT_TIMEOUT);
+    const long timeout = settings.getLong(SessionSettings::CONNECT_TIMEOUT);
     bool connected = false;
 
     for (struct addrinfo* addr = ret; addr != nullptr; addr = addr->ai_next) {
@@ -273,8 +273,8 @@ bool Network::hasAcceptor(const SessionSettings& settings)
         return false;
 
     std::lock_guard lock(m_mutex);
-    int port = settings.getLong(SessionSettings::ACCEPT_PORT);
-    auto it = m_acceptors.find(port);
+    const int port = settings.getLong(SessionSettings::ACCEPT_PORT);
+    const auto it = m_acceptors.find(port);
     if (it != m_acceptors.end())
         return m_readerThreads[it->second % m_readerThreadCount]->hasAcceptor(settings.getSessionID(), it->second);
     return false;
@@ -288,7 +288,7 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
     // acceptors should be created/destroyed atomically
     std::lock_guard lock(m_mutex);
 
-    int port = settings.getLong(SessionSettings::ACCEPT_PORT);
+    const int port = settings.getLong(SessionSettings::ACCEPT_PORT);
     int fd = m_acceptors[port];
 
     // see if we already have a live fd associated with this accept port
@@ -348,15 +348,15 @@ bool Network::removeAcceptor(const SessionSettings& settings)
     // acceptors should be created/destroyed atomically
     std::lock_guard lock(m_mutex);
 
-    int port = settings.getLong(SessionSettings::ACCEPT_PORT);
-    int fd = m_acceptors[port];
+    const int port = settings.getLong(SessionSettings::ACCEPT_PORT);
+    const int fd = m_acceptors[port];
 
     if (fd == 0) {
         // socket doesn't exist
         return false;
     }
 
-    bool wasLastSession = m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.getSessionID(), fd);
+    const bool wasLastSession = m_readerThreads[fd % m_readerThreadCount]->removeAcceptor(settings.getSessionID(), fd);
 
     if (wasLastSession) {
     	// remove from port->fd map
@@ -372,7 +372,7 @@ void Network::run()
     struct epoll_event events[EVENT_BUF_SIZE];
 
     int numEvents;
-    long timeout = PlatformSettings::getLong(PlatformSettings::EPOLL_TIMEOUT);
+    const long timeout = PlatformSettings::getLong(PlatformSettings::EPOLL_TIMEOUT);
 
     while (m_running) {
         while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) != 0) {
@@ -387,8 +387,8 @@ void Network::run()
             }
 
             for (int i = 0; i < numEvents; i++) {
-                int fd = events[i].data.fd;
-                uint32_t event_mask = events[i].events;
+                const int fd = events[i].data.fd;
+                const uint32_t event_mask = events[i].events;
 
                 if (event_mask & EPOLLERR) {
                     int err = 0;
@@ -429,7 +429,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
 {
     struct sockaddr_in addr;
     socklen_t addrlen = sizeof(addr);
-    int fd = ::accept(server_fd, reinterpret_cast<struct sockaddr*>(&addr), &addrlen);
+    const int fd = ::accept(server_fd, reinterpret_cast<struct sockaddr*>(&addr), &addrlen);
     if (fd < 0) {
         LOG_WARN("Failed to accept new socket: " << strerror(errno));
         return false;
@@ -447,7 +447,7 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
         return false;
     }
 
-    std::string address = std::string(ip) + ":" + std::to_string(::ntohs(addr.sin_port));
+    const std::string address = std::string(ip) + ":" + std::to_string(::ntohs(addr.sin_port));
 
     if (!acceptor->m_sessions.empty()) {
         const SessionSettings& settings = acceptor->m_sessions.begin()->second->getSettings();
@@ -550,11 +550,11 @@ std::shared_ptr<SSL_CTX> Network::getTLSContext(const SessionSettings& settings,
 {
     const std::string key = getTLSContextKey(settings, serverMode);
     std::lock_guard lock(m_tlsContextsMutex);
-    auto it = m_tlsContexts.find(key);
+    const auto it = m_tlsContexts.find(key);
     if (it != m_tlsContexts.end())
         return it->second;
 
-    auto ctx = createTLSContext(settings, serverMode);
+    const auto ctx = createTLSContext(settings, serverMode);
     if (ctx)
         m_tlsContexts[key] = ctx;
     return ctx;
@@ -654,14 +654,14 @@ bool Network::progressConnection(int fd)
     if (conn->m_ready.load(std::memory_order_acquire))
         return true;
 
-    int ret = conn->m_serverMode ? SSL_accept(conn->m_ssl) : SSL_connect(conn->m_ssl);
+    const int ret = conn->m_serverMode ? SSL_accept(conn->m_ssl) : SSL_connect(conn->m_ssl);
     if (ret == 1) {
         conn->m_ready.store(true, std::memory_order_release);
         LOG_INFO("TLS handshake complete for fd=" << fd << ", version=" << SSL_get_version(conn->m_ssl) << ", cipher=" << SSL_get_cipher(conn->m_ssl));
         return true;
     }
 
-    int sslErr = SSL_get_error(conn->m_ssl, ret);
+    const int sslErr = SSL_get_error(conn->m_ssl, ret);
     if (sslErr == SSL_ERROR_WANT_READ || sslErr == SSL_ERROR_WANT_WRITE)
         return true;
 
@@ -714,11 +714,11 @@ ssize_t Network::readConnection(int fd, void* buf, size_t len)
 
     std::lock_guard connLock(conn->m_mutex);
 
-    int ret = SSL_read(conn->m_ssl, buf, static_cast<int>(len));
+    const int ret = SSL_read(conn->m_ssl, buf, static_cast<int>(len));
     if (ret > 0)
         return ret;
 
-    int sslErr = SSL_get_error(conn->m_ssl, ret);
+    const int sslErr = SSL_get_error(conn->m_ssl, ret);
     if (sslErr == SSL_ERROR_WANT_READ || sslErr == SSL_ERROR_WANT_WRITE) {
         errno = EAGAIN;
         return -1;
@@ -751,11 +751,11 @@ ssize_t Network::writeConnection(int fd, const void* buf, size_t len)
 
     std::lock_guard connLock(conn->m_mutex);
 
-    int ret = SSL_write(conn->m_ssl, buf, static_cast<int>(len));
+    const int ret = SSL_write(conn->m_ssl, buf, static_cast<int>(len));
     if (ret > 0)
         return ret;
 
-    int sslErr = SSL_get_error(conn->m_ssl, ret);
+    const int sslErr = SSL_get_error(conn->m_ssl, ret);
     if (sslErr == SSL_ERROR_WANT_READ || sslErr == SSL_ERROR_WANT_WRITE) {
         errno = EAGAIN;
         return -1;
@@ -809,7 +809,7 @@ void ReaderThread::disconnect(int fd)
     ::close(fd);
     m_network.removeConnection(fd);
     m_buffer.clear(fd);
-    auto it = m_connections.find(fd);
+    const auto it = m_connections.find(fd);
     if (m_connections.find(fd) != m_connections.end()) {
         LOG_DEBUG("Disconnecting known connection, fd=" << fd);
         it->second->invalidate();
@@ -848,27 +848,37 @@ void ReaderThread::process()
 
 void ReaderThread::process(int fd)
 {
-    // lock here as we're touching connection maps
-    std::lock_guard lock(m_mutex);
+    // Fast path: look up the handler under the lock, then release before processing.
+    // This avoids holding m_mutex during socket reads and processMessage callbacks,
+    // allowing new connections to be registered without blocking behind message handling.
+    std::shared_ptr<NetworkHandler> handler;
+    {
+        std::lock_guard lock(m_mutex);
 
-    if (!m_network.progressConnection(fd)) {
-        disconnect(fd);
+        if (!m_network.progressConnection(fd)) {
+            disconnect(fd);
+            return;
+        }
+
+        auto it = m_connections.find(fd);
+        if (it != m_connections.end()) {
+            handler = it->second;  // copy shared_ptr; ref-count keeps handler alive
+        }
+    }
+
+    // Known connection: read + process outside the lock
+    if (handler) {
+        LOG_TRACE("Handling data for known connection on fd=" << fd);
+
+        auto msgs = m_buffer.read(fd);
+        for (auto& msg : msgs)
+            handler->processMessage(std::move(msg));
+
         return;
     }
 
-    // known connections
-    {
-        auto it = m_connections.find(fd);
-        if (it != m_connections.end()) {
-            LOG_TRACE("Handling data for known connection on fd=" << fd);
-
-            auto msgs = m_buffer.read(fd);
-            for (auto& msg : msgs)
-                it->second->processMessage(std::move(msg));
-
-            return;
-        }
-    }
+    // Cold paths (connection setup): re-acquire lock for map mutations
+    std::lock_guard lock(m_mutex);
 
     // acceptor socket
     {
@@ -885,7 +895,7 @@ void ReaderThread::process(int fd)
         auto it = m_unknownConnections.find(fd);
         if (it != m_unknownConnections.end()) {
             LOG_TRACE("Handling data for unknown connection on fd=" << fd);
-            auto acceptor = it->second;
+            const auto acceptor = it->second;
 
             auto msgs = m_buffer.read(fd);
             if (!msgs.empty()) {
@@ -893,14 +903,14 @@ void ReaderThread::process(int fd)
                 m_unknownConnections.erase(fd);
                 const auto& msg = msgs[0];
 
-                auto sender_comp = Utils::getTagValue(msg, SENDER_COMP_ID_PATTERN, SENDER_COMP_ID_PATTERN.size(), 0);
+                const auto sender_comp = Utils::getTagValue(msg, SENDER_COMP_ID_PATTERN, SENDER_COMP_ID_PATTERN.size(), 0);
                 if (sender_comp.first.empty()) {
                     LOG_ERROR("Received message without SenderCompID");
                     ::close(fd);
                     return;
                 }
 
-                auto target_comp = Utils::getTagValue(msg, TARGET_COMP_ID_PATTERN, TARGET_COMP_ID_PATTERN.size(), sender_comp.second);
+                const auto target_comp = Utils::getTagValue(msg, TARGET_COMP_ID_PATTERN, TARGET_COMP_ID_PATTERN.size(), sender_comp.second);
                 if (target_comp.first.empty()) {
                     LOG_ERROR("Received message without TargetCompID");
                     ::close(fd);
@@ -908,8 +918,8 @@ void ReaderThread::process(int fd)
                 }
 
                 // flip as this is from their perspective
-                auto cpty = target_comp.first + ':' + sender_comp.first;
-                auto consumerIt = acceptor->m_sessions.find(cpty);
+                const auto cpty = target_comp.first + ':' + sender_comp.first;
+                const auto consumerIt = acceptor->m_sessions.find(cpty);
                 if (consumerIt == acceptor->m_sessions.end()) {
                     LOG_ERROR("Received connection from unknown counterparty: " << cpty);
                     ::close(fd);
@@ -1013,7 +1023,7 @@ void ReaderThread::addAcceptor(const std::shared_ptr<NetworkHandler>& handler, c
 bool ReaderThread::removeAcceptor(const SessionID_T sessionID, int fd)
 {
     std::lock_guard lock(m_mutex);
-    auto it = m_acceptorSockets.find(fd);
+    const auto it = m_acceptorSockets.find(fd);
     if (it == m_acceptorSockets.end())
         return true;
     it->second->m_sessions.erase(sessionID);
@@ -1063,7 +1073,7 @@ std::vector<std::string> ReadBuffer::read(int fd)
             ptr = tag_it.second;
 
             try {
-                int bodyLength = std::stoi(tag_it.first);
+                const int bodyLength = std::stoi(tag_it.first);
                 if (bodyLength < 0)
                     throw std::runtime_error("Negative body length");
                 ptr += bodyLength;
@@ -1154,7 +1164,7 @@ void WriterThread::process()
 
             size_t sent = 0;
             while (sent < buffer.m_buffer.length()) {
-                ssize_t ret = m_network.writeConnection(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent);
+                const ssize_t ret = m_network.writeConnection(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent);
                 if (ret < 0) {
                     if (errno != EAGAIN && errno != EWOULDBLOCK) {
                         LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
@@ -1202,7 +1212,7 @@ bool WriterThread::trySend(int fd, MsgPacket& msg)
         return false;
 
     // Only inline send when there's no pending data for this fd — preserves message ordering
-    auto it = m_bufferMap.find(fd);
+    const auto it = m_bufferMap.find(fd);
     if (it != m_bufferMap.end()) {
         if (!it->second.m_valid.load(std::memory_order_acquire))
             return false;
@@ -1210,7 +1220,7 @@ bool WriterThread::trySend(int fd, MsgPacket& msg)
             return false;
     }
 
-    ssize_t ret = m_network.writeConnection(fd, msg.m_msg.c_str(), msg.m_msg.size());
+    const ssize_t ret = m_network.writeConnection(fd, msg.m_msg.c_str(), msg.m_msg.size());
 
     if (ret == static_cast<ssize_t>(msg.m_msg.size()))
         return true;
@@ -1300,7 +1310,7 @@ void NetworkHandler::start()
 {
     if (m_settings.getSessionType() == SessionType::INITIATOR) {
         LOG_INFO("Attempting to connect...");
-        bool ret = m_network.connect(m_settings, shared_from_this());
+        const bool ret = m_network.connect(m_settings, shared_from_this());
         if (ret) {
             LOG_INFO("Successful connection.");
         } else {
@@ -1309,7 +1319,7 @@ void NetworkHandler::start()
     } else if (m_settings.getSessionType() == SessionType::ACCEPTOR) {
         if (!m_network.hasAcceptor(m_settings)) {
             LOG_INFO("Attempting to create acceptor...");
-            bool ret = m_network.addAcceptor(m_settings, shared_from_this());
+            const bool ret = m_network.addAcceptor(m_settings, shared_from_this());
             if (ret) {
                 LOG_INFO("Successfully created acceptor.");
             } else {

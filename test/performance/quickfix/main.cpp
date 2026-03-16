@@ -6,6 +6,7 @@
 #include "QFMessageParseBenchmark.h"
 #include "QFMessageSerializeBenchmark.h"
 #include "QFNetworkThroughputBenchmark.h"
+#include "QFMultilegRoundTripBenchmark.h"
 #include "QFRoundTripBenchmark.h"
 
 int main(int argc, char** argv)
@@ -32,6 +33,7 @@ int main(int argc, char** argv)
     if (!cpuOnly) {
         append(perf::runQFNetworkThroughputBenchmarks());
         append(perf::runQFRoundTripBenchmarks());
+        append(perf::runQFMultilegRoundTripBenchmarks());
     }
 
     perf::printResults(results, "quickfix");
