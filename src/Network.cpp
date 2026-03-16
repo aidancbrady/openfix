@@ -1122,7 +1122,9 @@ void WriterThread::process()
     while (m_running.load(std::memory_order_acquire)) {
         {
             std::unique_lock lock(m_mutex);
-            m_cv.wait(lock);
+            if (!m_hasWork.load(std::memory_order_acquire))
+                m_cv.wait(lock);
+            m_hasWork.store(false, std::memory_order_release);
         }
 
         if (!m_running.load(std::memory_order_acquire))
@@ -1185,6 +1187,7 @@ void WriterThread::process()
                 // Not all data was sent; store the unsent part back in m_queue for later.
                 std::lock_guard lock(m_mutex);
                 buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
+                m_hasWork.store(true, std::memory_order_release);
             }
 
             buffer.m_buffer.clear();
@@ -1192,10 +1195,39 @@ void WriterThread::process()
     }
 }
 
+bool WriterThread::trySend(int fd, MsgPacket& msg)
+{
+    std::unique_lock lock(m_mutex, std::try_to_lock);
+    if (!lock.owns_lock())
+        return false;
+
+    // Only inline send when there's no pending data for this fd — preserves message ordering
+    auto it = m_bufferMap.find(fd);
+    if (it != m_bufferMap.end()) {
+        if (!it->second.m_valid.load(std::memory_order_acquire))
+            return false;
+        if (!it->second.m_queue.empty() || !it->second.m_buffer.empty())
+            return false;
+    }
+
+    ssize_t ret = m_network.writeConnection(fd, msg.m_msg.c_str(), msg.m_msg.size());
+
+    if (ret == static_cast<ssize_t>(msg.m_msg.size()))
+        return true;
+
+    // Partial send — trim what was sent so the caller queues only the remainder
+    if (ret > 0)
+        msg.m_msg.erase(0, ret);
+
+    // EAGAIN / EWOULDBLOCK / partial — caller will queue via send()
+    return false;
+}
+
 void WriterThread::send(int fd, MsgPacket&& msg)
 {
     {
         std::lock_guard lock(m_mutex);
+        m_hasWork.store(true, std::memory_order_release);
         m_bufferMap[fd].m_queue.append(msg.m_msg);
         m_bufferMap[fd].m_meta_queue.push_back(std::move(msg));
     }
@@ -1239,7 +1271,20 @@ void ConnectionHandle::disconnect()
 
 void ConnectionHandle::send(MsgPacket&& msg)
 {
-    m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->send(m_fd, std::move(msg));
+    auto& writer = *m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount];
+
+    // Try non-blocking inline send first — avoids the WriterThread hop entirely
+    // when the mutex is uncontended and no data is pending for this fd.
+    // Never blocks: uses try_lock + non-blocking socket write.
+    if (writer.trySend(m_fd, msg)) {
+        // Full send succeeded inline — fire callback outside the lock
+        if (msg.m_callback)
+            msg.m_callback();
+        return;
+    }
+
+    // Fall back to async WriterThread queue (partial sends have already been trimmed)
+    writer.send(m_fd, std::move(msg));
 }
 
 bool ConnectionHandle::isReady() const

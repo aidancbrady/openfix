@@ -8,10 +8,10 @@
 //               Dispatcher               //
 ////////////////////////////////////////////
 
-Dispatcher::Dispatcher(size_t threads)
+Dispatcher::Dispatcher(size_t threads, bool spin)
 {
     for (size_t i = 0; i < threads; ++i)
-        m_workers.push_back(std::make_unique<Worker>());
+        m_workers.push_back(std::make_unique<Worker>(spin));
 }
 
 Dispatcher::~Dispatcher()
@@ -26,6 +26,25 @@ Dispatcher::~Dispatcher()
 void Worker::run()
 {
     while (!m_stop.load(std::memory_order_acquire)) {
+        Callback task;
+        if (m_queue.try_dequeue(task)) {
+            task();
+            continue;
+        }
+
+        if (m_spin) {
+            // Busy-poll: avoid kernel CV wakeup overhead at the cost of a dedicated core.
+            // _mm_pause / __builtin_ia32_pause reduces power draw and improves
+            // performance on hyperthreaded cores by hinting the CPU we're spinning.
+#if defined(__x86_64__) || defined(__i386__)
+            __builtin_ia32_pause();
+#else
+            std::this_thread::yield();
+#endif
+            continue;
+        }
+
+        // Normal mode: sleep on CV until work arrives
         {
             std::unique_lock<std::mutex> lock(m_mutex);
             m_cv.wait(lock, [&]() { return m_stop.load() || m_queue.size_approx() > 0; });
@@ -33,7 +52,6 @@ void Worker::run()
 
         if (m_stop.load())
             return;
-        Callback task;
         if (m_queue.try_dequeue(task))
             task();
     }
@@ -41,18 +59,22 @@ void Worker::run()
 
 void Worker::dispatch(Callback&& callback)
 {
-    {
+    m_queue.enqueue(std::move(callback));
+
+    if (!m_spin) {
         std::lock_guard lock(m_mutex);
-        m_queue.enqueue(callback);
+        m_cv.notify_one();
     }
-    m_cv.notify_one();
 }
 
 void Worker::stop()
 {
-    std::unique_lock<std::mutex> lock(m_mutex);
     m_stop.store(true, std::memory_order_release);
-    m_cv.notify_one();
+
+    if (!m_spin) {
+        std::lock_guard lock(m_mutex);
+        m_cv.notify_one();
+    }
 }
 
 void Dispatcher::dispatch(Callback callback)

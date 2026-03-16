@@ -1,5 +1,6 @@
 #include "FileUtils.h"
 
+#include <algorithm>
 #include <filesystem>
 
 FileWriter::FileWriter()
@@ -32,13 +33,13 @@ void FileWriter::stop()
     }
 }
 
-std::unique_ptr<WriterInstance>& FileWriter::createInstance(const std::string& fileName)
+std::unique_ptr<WriterInstance>& FileWriter::createInstance(const std::string& fileName, bool formatFIXMessages)
 {
     auto it = m_instances.find(fileName);
     if (it != m_instances.end())
         return it->second;
 
-    it = m_instances.emplace(fileName, std::make_unique<WriterInstance>(fileName, m_cv)).first;
+    it = m_instances.emplace(fileName, std::make_unique<WriterInstance>(fileName, m_cv, formatFIXMessages)).first;
     return it->second;
 }
 
@@ -77,6 +78,9 @@ void FileWriter::process()
 
             if (instance.m_buffer.empty())
                 continue;
+
+            if (instance.m_formatFIXMessages)
+                std::replace(instance.m_buffer.begin(), instance.m_buffer.end(), '\x01', '|');
 
             // write
             if (!instance.m_stream.is_open() || !instance.m_stream.good()) {

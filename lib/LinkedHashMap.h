@@ -73,6 +73,8 @@ public:
         return true;
     }
 
+    void reserve(size_t n) { m_data.reserve(n); }
+
     bool empty() const { return m_data.empty(); }
     size_t size() const { return m_data.size(); }
 

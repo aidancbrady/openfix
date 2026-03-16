@@ -18,10 +18,11 @@ class FileWriter;
 class WriterInstance
 {
 public:
-    explicit WriterInstance(std::string path, std::condition_variable& cv)
+    explicit WriterInstance(std::string path, std::condition_variable& cv, bool formatFIXMessages = false)
         : m_path(std::move(path))
         , m_cv(cv)
         , m_shouldReset(false)
+        , m_formatFIXMessages(formatFIXMessages)
     {
         m_buffer.reserve(BUF_SIZE);
         m_queue.reserve(BUF_SIZE);
@@ -48,6 +49,7 @@ private:
     std::condition_variable& m_cv;
 
     std::atomic<bool> m_shouldReset;
+    bool m_formatFIXMessages;
 
     friend class FileWriter;
 };
@@ -61,7 +63,7 @@ public:
     void start();
     void stop();
 
-    std::unique_ptr<WriterInstance>& createInstance(const std::string& fileName);
+    std::unique_ptr<WriterInstance>& createInstance(const std::string& fileName, bool formatFIXMessages = false);
 
 private:
     void process();

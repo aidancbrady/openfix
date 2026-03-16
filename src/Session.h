@@ -38,7 +38,8 @@ struct SessionDelegate
 class Session
 {
 public:
-    Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store);
+    Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store,
+            Dispatcher& dispatcher, int dispatchHash);
     ~Session();
 
     void start();
@@ -102,7 +103,9 @@ private:
     void runMessageRecovery(int from, int to);
 
     void internal_update();
+    
     void internal_send(const Message& msg, SendCallback_T callback);
+    void internal_send(std::string msg, SendCallback_T callback);
 
 private:
     void onMessage(std::string msg);
@@ -143,7 +146,8 @@ private:
 
     std::atomic<bool> m_enabled;
 
-    Dispatcher dispatcher;
+    Dispatcher& m_dispatcher;
+    int m_dispatchHash;
 
     long m_lastSentHeartbeat = 0;
     long m_lastRecvHeartbeat = 0;

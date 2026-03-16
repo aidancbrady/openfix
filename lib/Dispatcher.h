@@ -19,8 +19,9 @@ class Dispatcher;
 class Worker
 {
 public:
-    Worker()
+    explicit Worker(bool spin = false)
         : m_stop(false)
+        , m_spin(spin)
     {
         m_thread = std::thread([this] { run(); });
     }
@@ -35,6 +36,7 @@ private:
     LockFreeQueueT<Callback> m_queue;
     std::thread m_thread;
     std::atomic<bool> m_stop;
+    bool m_spin;
 
     friend class Dispatcher;
 
@@ -45,14 +47,16 @@ class Dispatcher
 {
 public:
     Dispatcher()
-        : Dispatcher(1)
+        : Dispatcher(1, false)
     {}
-    Dispatcher(size_t threadCount);
+    Dispatcher(size_t threadCount, bool spin = false);
 
     ~Dispatcher();
 
     void dispatch(Callback callback);
     void dispatch(Callback callback, int hash);
+
+    size_t size() const { return m_workers.size(); }
 
 private:
     std::vector<std::unique_ptr<Worker>> m_workers;

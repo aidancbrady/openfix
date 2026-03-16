@@ -130,7 +130,8 @@ static std::string fmtLargeInt(uint64_t v)
     return s;
 }
 
-inline void printResults(const std::vector<BenchmarkResult>& results)
+inline void printResults(const std::vector<BenchmarkResult>& results,
+                        const std::string& engine = "openfix")
 {
     constexpr int W_NAME  = 28;
     constexpr int W_ITERS = 12;
@@ -180,8 +181,8 @@ inline void printResults(const std::vector<BenchmarkResult>& results)
             << "\n";
     };
 
-    std::cout << "\nopenfix Performance Benchmark Suite\n";
-    std::cout << "====================================\n\n";
+    std::cout << "\n" << engine << " Performance Benchmark Suite\n";
+    std::cout << std::string(engine.size() + 27, '=') << "\n\n";
 
     printRow("Benchmark", "Iters", "Msgs/sec",
              "Min(us)", "Avg(us)", "P50(us)", "P95(us)", "P99(us)", "Max(us)");
@@ -208,14 +209,25 @@ inline void printResults(const std::vector<BenchmarkResult>& results)
     }
     printSep();
 
-    std::cout
-        << "\nNotes:\n"
-        << "  - Checksum:   SSE2-accelerated path on x86_64, at various payload sizes\n"
-        << "  - Parse:      FIX.4.2 dictionary parse from raw bytes, no network I/O\n"
-        << "  - Serialize:  dict->create() + setField() + toString(), no network I/O\n"
-        << "  - Network:    full-stack ingestion: parse + seq validation + store + dispatch\n"
-        << "  - RoundTrip:  TestRequest(35=1) -> Heartbeat(35=0) response, full network path\n"
-        << "  - Latency in microseconds; '-' = not applicable for this benchmark type\n";
+    if (engine == "openfix") {
+        std::cout
+            << "\nNotes:\n"
+            << "  - Checksum:   SSE2-accelerated path on x86_64, at various payload sizes\n"
+            << "  - Parse:      FIX.4.2 dictionary parse from raw bytes, no network I/O\n"
+            << "  - Serialize:  dict->create() + setField() + toString(), no network I/O\n"
+            << "  - Network:    full-stack ingestion: parse + seq validation + store + dispatch\n"
+            << "  - RoundTrip:  TestRequest(35=1) -> Heartbeat(35=0) response, full network path\n"
+            << "  - Latency in microseconds; '-' = not applicable for this benchmark type\n";
+    } else {
+        std::cout
+            << "\nNotes:\n"
+            << "  - Checksum:   scalar byte-by-byte loop (no SIMD), at various payload sizes\n"
+            << "  - Parse:      FIX.4.2 DataDictionary parse from raw bytes, no network I/O\n"
+            << "  - Serialize:  message construction + setField() + toString(), no network I/O\n"
+            << "  - Network:    full-stack ingestion via SocketAcceptor\n"
+            << "  - RoundTrip:  TestRequest(35=1) -> Heartbeat(35=0) response, full network path\n"
+            << "  - Latency in microseconds; '-' = not applicable for this benchmark type\n";
+    }
 }
 
 } // namespace perf

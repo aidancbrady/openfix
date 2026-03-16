@@ -15,6 +15,8 @@ Application::Application(std::shared_ptr<IFIXLogger> logger, std::shared_ptr<IFI
     : m_logger(std::move(logger))
     , m_store(std::move(store))
     , m_network(std::make_unique<Network>())
+    , m_dispatcher(PlatformSettings::getLong(PlatformSettings::DISPATCHER_THREADS),
+                   PlatformSettings::getBool(PlatformSettings::DISPATCHER_SPIN))
 {}
 
 Application::~Application()
@@ -61,7 +63,8 @@ void Application::createSession(const std::string& sessionName, const SessionSet
     if (m_sessionMap.find(sessionName) != m_sessionMap.end())
         throw std::runtime_error("Session already exists with name: " + sessionName);
 
-    auto session = std::make_shared<Session>(settings, *m_network, m_logger, m_store);
+    int dispatchHash = static_cast<int>(m_sessionMap.size());
+    auto session = std::make_shared<Session>(settings, *m_network, m_logger, m_store, m_dispatcher, dispatchHash);
     m_sessionMap[sessionName] = std::move(session);
 }
 

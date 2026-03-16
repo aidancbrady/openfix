@@ -1,6 +1,5 @@
 #include "Session.h"
 
-#include <algorithm>
 #include <openfix/Utils.h>
 #include <strings.h>
 
@@ -8,11 +7,14 @@
 #include "Fields.h"
 #include "Messages.h"
 
-Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store)
+Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store,
+                 Dispatcher& dispatcher, int dispatchHash)
     : m_settings(settings)
     , m_logger(logger->createLogger(settings))
     , m_state(SessionState::LOGON)
     , m_enabled(true)
+    , m_dispatcher(dispatcher)
+    , m_dispatchHash(dispatchHash)
 {
     m_dictionary = DictionaryRegistry::instance().load(settings.getString(SessionSettings::FIX_DICTIONARY));
     m_cache = std::make_unique<MemoryCache>(settings, m_dictionary, store);
@@ -46,7 +48,7 @@ void Session::stop()
 
 void Session::onMessage(std::string text)
 {
-    dispatcher.dispatch([this, text = std::move(text)] {
+    m_dispatcher.dispatch([this, text = std::move(text)] {
         if (m_state == SessionState::KILLING) {
             LOG_WARN("Received message while killing session, ignoring");
             return;
@@ -55,7 +57,7 @@ void Session::onMessage(std::string text)
         try {
             // parse message
             auto msg = m_dictionary->parse(m_settings, text);
-            m_logger.logMessage(msg.toString(), Direction::INBOUND);
+            m_logger.logMessage(text, Direction::INBOUND);
 
             LOG_DEBUG("Received: " << msg);
 
@@ -75,7 +77,7 @@ void Session::onMessage(std::string text)
         } catch (...) {
             LOG_ERROR("Unknown error while handling message!");
         }
-    });
+    }, m_dispatchHash);
 }
 
 void Session::processMessage(const Message& msg, long time)
@@ -133,24 +135,26 @@ void Session::processMessage(const Message& msg, long time)
 
 void Session::send(Message& msg, SendCallback_T callback)
 {
-    int seqnum = populateMessage(msg);
-    m_cache->cache(seqnum, msg);
+    const int seqnum = populateMessage(msg);
+    auto wire = msg.toString(true);
+    m_cache->cache(seqnum, wire);
     m_cache->nextSenderSeqNum();
-    internal_send(msg, callback);
+    internal_send(std::move(wire), std::move(callback));
 }
 
 void Session::internal_send(const Message& msg, SendCallback_T callback)
 {
+    auto wire = msg.toString(true);
+    internal_send(std::move(wire), std::move(callback));
+}
+
+void Session::internal_send(std::string msg, SendCallback_T callback)
+{
     if (m_network->isConnected()) {
-        auto internal_str = msg.toString(true);
+        LOG_DEBUG("Sending outbound FIX message");
+        m_logger.logMessage(msg, Direction::OUTBOUND);
 
-        // convert internal SOH to external for logging (cheap char replace)
-        auto log_str = internal_str;
-        std::replace(log_str.begin(), log_str.end(), INTERNAL_SOH_CHAR, EXTERNAL_SOH_CHAR);
-        LOG_DEBUG("Sending: " << log_str);
-        m_logger.logMessage(std::move(log_str), Direction::OUTBOUND);
-
-        m_network->send({std::move(internal_str), callback});
+        m_network->send({std::move(msg), std::move(callback)});
 
         // update our heartbeat monitor as we just sent data
         m_lastSentHeartbeat = Utils::getEpochMillis();
@@ -159,13 +163,13 @@ void Session::internal_send(const Message& msg, SendCallback_T callback)
 
 void Session::runUpdate()
 {
-    dispatcher.dispatch([this] {
+    m_dispatcher.dispatch([this] {
         try {
             internal_update();
         } catch (...) {
             LOG_ERROR("Error during update loop!");
         }
-    });
+    }, m_dispatchHash);
 }
 
 void Session::internal_update()

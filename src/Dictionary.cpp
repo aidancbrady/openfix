@@ -71,6 +71,12 @@ Message Dictionary::parse(const SessionSettings& settings, const std::string& te
 
     Message ret;
 
+    // Pre-allocate FieldMaps: typical FIX field is ~8 chars
+    size_t estimatedFields = text.size() / 8;
+    ret.getHeader().reserve(10);
+    ret.getBody().reserve(estimatedFields > 11 ? estimatedFields - 11 : 4);
+    ret.getTrailer().reserve(2);
+
     MessageState msgState = MessageState::HEADER;
     ParserState state = ParserState::START;
 

@@ -47,3 +47,11 @@ cc_library(
 )
 """,
 )
+
+new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
+new_git_repository(
+    name = "quickfix",
+    remote = "https://github.com/quickfix/quickfix.git",
+    commit = "00dd20837c97578e725072e5514c8ffaa0e141d4",
+    build_file = "//third_party:quickfix.BUILD",
+)

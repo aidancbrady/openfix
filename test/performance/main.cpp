@@ -26,9 +26,16 @@ int main(int argc, char** argv)
     });
 
     bool cpuOnly = false;
+    bool spin = false;
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--cpu-only")
             cpuOnly = true;
+        if (std::string(argv[i]) == "--spin")
+            spin = true;
+    }
+
+    if (spin) {
+        PlatformSettings::load({{"DispatcherSpin", "true"}});
     }
 
     std::vector<perf::BenchmarkResult> results;

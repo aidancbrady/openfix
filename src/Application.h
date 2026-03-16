@@ -49,6 +49,8 @@ private:
 
     std::unique_ptr<Network> m_network;
 
+    Dispatcher m_dispatcher;
+
     std::atomic<bool> m_running;
 
     std::thread m_updateThread;

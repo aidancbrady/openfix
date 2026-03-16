@@ -14,11 +14,12 @@ void MemoryCache::load()
 
     m_messages.clear();
 
-    m_senderSeqNum = data.m_senderSeqNum;
-    m_targetSeqNum = data.m_targetSeqNum;
+    m_senderSeqNum.store(data.m_senderSeqNum, std::memory_order_release);
+    m_targetSeqNum.store(data.m_targetSeqNum, std::memory_order_release);
 
-    for (const auto& [idx, msg] : data.m_messages) {
-        m_messages.emplace(idx, m_dictionary->parse(m_settings, msg));
+    // Store wire strings directly — no need to parse on load
+    for (auto& [idx, msg] : data.m_messages) {
+        m_messages.emplace(idx, std::move(msg));
     }
 }
 
@@ -27,67 +28,61 @@ void MemoryCache::reset()
     m_messages.clear();
     m_inboundQueue.clear();
 
-    m_senderSeqNum = 0;
-    m_targetSeqNum = 0;
+    m_senderSeqNum.store(0, std::memory_order_release);
+    m_targetSeqNum.store(0, std::memory_order_release);
 
     m_store.reset();
 }
 
 int MemoryCache::getSenderSeqNum() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    return m_senderSeqNum;
+    return m_senderSeqNum.load(std::memory_order_acquire);
 }
 
 int MemoryCache::getTargetSeqNum() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    return m_targetSeqNum;
+    return m_targetSeqNum.load(std::memory_order_acquire);
 }
 
 void MemoryCache::setSenderSeqNum(int num)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    m_senderSeqNum = num;
+    m_senderSeqNum.store(num, std::memory_order_release);
     m_store.setSenderSeqNum(num);
 }
 
 void MemoryCache::setTargetSeqNum(int num)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    m_targetSeqNum = num;
+    m_targetSeqNum.store(num, std::memory_order_release);
     m_store.setTargetSeqNum(num);
 }
 
 int MemoryCache::nextSenderSeqNum()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    int next = getSenderSeqNum() + 1;
-    setSenderSeqNum(next);
+    int next = m_senderSeqNum.fetch_add(1, std::memory_order_acq_rel) + 1;
+    m_store.setSenderSeqNum(next);
     return next;
 }
 
 int MemoryCache::nextTargetSeqNum()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    int next = getTargetSeqNum() + 1;
-    setTargetSeqNum(next);
+    int next = m_targetSeqNum.fetch_add(1, std::memory_order_acq_rel) + 1;
+    m_store.setTargetSeqNum(next);
     return next;
 }
 
-void MemoryCache::cache(int seqnum, const Message& msg)
+void MemoryCache::cache(int seqnum, const std::string& wire)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    m_messages[seqnum] = msg;
-    m_store.store(seqnum, msg.toString(true));
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_messages[seqnum] = wire;
+    m_store.store(seqnum, wire);
 }
 
 void MemoryCache::getMessages(int begin, int end, MessageConsumer consumer) const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_messages.lower_bound(begin);
     for (; it != m_messages.end() && (end == 0 || it->first <= end); ++it) {
-        consumer(it->first, it->second);
+        consumer(it->first, m_dictionary->parse(m_settings, it->second));
     }
 }
 

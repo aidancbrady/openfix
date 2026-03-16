@@ -192,6 +192,8 @@ public:
         return m_fields.find(tag) != m_fields.end();
     }
 
+    void reserve(size_t n) { m_fields.reserve(n); }
+
     void setSpec(std::shared_ptr<GroupSpec> spec)
     {
         m_groupSpec = std::move(spec);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <map>
 #include <memory>
 
@@ -12,7 +13,7 @@ class IFIXCache
 public:
     virtual ~IFIXCache() = default;
 
-    virtual void cache(int seqnum, const Message& msg) = 0;
+    virtual void cache(int seqnum, const std::string& wire) = 0;
 
     using MessageConsumer = std::function<void(int, const Message&)>;
     virtual void getMessages(int begin, int end, MessageConsumer consumer) const = 0;
@@ -37,7 +38,7 @@ class MemoryCache : public IFIXCache
 public:
     MemoryCache(const SessionSettings& settings, std::shared_ptr<Dictionary> dictionary, std::shared_ptr<IFIXStore> store);
 
-    void cache(int seqnum, const Message& msg) override;
+    void cache(int seqnum, const std::string& wire) override;
 
     void getMessages(int begin, int end, MessageConsumer consumer) const override;
 
@@ -59,12 +60,13 @@ private:
     const SessionSettings& m_settings;
     std::shared_ptr<Dictionary> m_dictionary;
 
-    int m_senderSeqNum;
-    int m_targetSeqNum;
+    std::atomic<int> m_senderSeqNum;
+    std::atomic<int> m_targetSeqNum;
 
-    std::map<int, Message> m_messages;
+    // Wire-only cache: stores serialized FIX strings, re-parsed on demand for resend requests
+    std::map<int, std::string> m_messages;
 
-    mutable std::recursive_mutex m_mutex;
+    mutable std::mutex m_mutex;
 
     std::map<int, Message> m_inboundQueue;
 

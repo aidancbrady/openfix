@@ -246,6 +246,10 @@ public:
     void notify();
     void process();
 
+    // Try non-blocking inline send. Returns true if the full message was sent.
+    // Only attempts when the mutex is uncontended and no data is pending for this fd.
+    bool trySend(int fd, MsgPacket& msg);
+
     void send(int fd, MsgPacket&& msg);
     void disconnect(int fd);
 
@@ -258,6 +262,7 @@ public:
 
 private:
     std::atomic<bool> m_running;
+    std::atomic<bool> m_hasWork{false};
     std::mutex m_mutex;
     std::condition_variable_any m_cv;
     std::thread m_thread;
