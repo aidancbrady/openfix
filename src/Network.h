@@ -4,8 +4,7 @@
 #include <openfix/Types.h>
 
 #include <atomic>
-#include <condition_variable>
-#include <list>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -17,7 +16,7 @@
 #include "Config.h"
 
 #define READ_BUF_SIZE 8192
-#define WRITE_BUF_SIZE 8192
+#define MAX_WRITE_IOVECS 64
 
 class Network;
 class ReaderThread;
@@ -66,6 +65,7 @@ public:
         , m_network(network)
         , m_callback(std::move(callback))
         , m_valid(true)
+        , m_stopped(false)
     {}
 
     virtual ~NetworkHandler() = default;
@@ -97,6 +97,7 @@ private:
     std::shared_ptr<ConnectionHandle> m_connection;
 
     std::atomic<bool> m_valid;
+    std::atomic<bool> m_stopped;
 
     CREATE_LOGGER("Network");
 };
@@ -133,21 +134,60 @@ private:
     CREATE_LOGGER("ReadBuffer");
 };
 
+struct WriteEntry
+{
+    std::string m_msg;
+    SendCallback_T m_callback;
+};
+
+struct WriteBuffer
+{
+    WriteBuffer() = default;
+
+    WriteBuffer(WriteBuffer&& other) noexcept
+        : m_queue(std::move(other.m_queue))
+        , m_drain(std::move(other.m_drain))
+        , m_offset(other.m_offset)
+        , m_valid(other.m_valid.load(std::memory_order_relaxed))
+    {}
+
+    WriteBuffer& operator=(WriteBuffer&& other) noexcept
+    {
+        m_queue = std::move(other.m_queue);
+        m_drain = std::move(other.m_drain);
+        m_offset = other.m_offset;
+        m_valid.store(other.m_valid.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        return *this;
+    }
+
+    // Queue: populated by external threads (under ReaderThread::m_writeMutex)
+    std::deque<WriteEntry> m_queue;
+
+    // Drain buffer: swapped from queue, only touched by reader thread
+    std::deque<WriteEntry> m_drain;
+    size_t m_offset = 0;  // byte offset into first entry for partial sends
+
+    std::atomic<bool> m_valid{true};
+};
+
 class ReaderThread
 {
 public:
-    ReaderThread(Network& network)
-        : m_running(true)
-        , m_buffer(network)
-        , m_network(network)
-    {
-        m_thread = std::thread([&] { process(); });
-    }
+    ReaderThread(Network& network);
+    ~ReaderThread();
 
     void process();
-    void process(int fd);
+    void processRead(int fd);
 
-    void queue(int fd);
+    void registerFD(int fd);
+
+    // Queue a write from an external thread; wakes reader via eventfd
+    void queueWrite(int fd, MsgPacket&& msg);
+
+    // Try non-blocking inline send from caller's thread.
+    // Returns true if the full message was sent.
+    bool trySend(int fd, MsgPacket& msg);
+
     void disconnect(int fd);
 
     bool addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd);
@@ -165,12 +205,19 @@ public:
     }
 
 private:
+    void flushWrites();
+    void flushWrite(int fd, WriteBuffer& wb);
+
     std::atomic<bool> m_running;
     std::recursive_mutex m_mutex;
-    std::condition_variable_any m_cv;
     std::thread m_thread;
 
-    LockFreeQueueT<int> m_readyFDs;
+    int m_epollFD;
+    int m_eventFD;
+
+    // Write buffers: fd -> buffer (m_writeMutex protects m_queue insertion)
+    std::mutex m_writeMutex;
+    HashMapT<int, WriteBuffer> m_writeBuffers;
 
     ReadBuffer m_buffer;
 
@@ -184,94 +231,6 @@ private:
     Network& m_network;
 
     CREATE_LOGGER("ReaderThread");
-};
-
-struct WriteBuffer
-{
-    WriteBuffer()
-    {
-        m_queue.reserve(WRITE_BUF_SIZE);
-        m_buffer.reserve(WRITE_BUF_SIZE);
-    }
-
-    WriteBuffer(WriteBuffer&& other) noexcept
-        : m_queue(std::move(other.m_queue))
-        , m_buffer(std::move(other.m_buffer))
-        , m_meta_queue(std::move(other.m_meta_queue))
-        , m_meta_buffer(std::move(other.m_meta_buffer))
-        , m_valid(other.m_valid.load(std::memory_order_relaxed))
-    {}
-
-    WriteBuffer& operator=(WriteBuffer&& other) noexcept
-    {
-        m_queue = std::move(other.m_queue);
-        m_buffer = std::move(other.m_buffer);
-        m_meta_queue = std::move(other.m_meta_queue);
-        m_meta_buffer = std::move(other.m_meta_buffer);
-        m_valid.store(other.m_valid.load(std::memory_order_relaxed), std::memory_order_relaxed);
-        return *this;
-    }
-
-    struct MsgMetadata
-    {
-        MsgMetadata(MsgPacket&& packet)
-        {
-            m_callback = std::move(packet.m_callback);
-            m_msg_size = packet.m_msg.size();
-        }
-
-        SendCallback_T m_callback;
-        size_t m_msg_size;
-    };
-
-    std::string m_queue;
-    std::string m_buffer;
-
-    std::list<MsgMetadata> m_meta_queue;
-    std::list<MsgMetadata> m_meta_buffer;
-
-    std::atomic<bool> m_valid = true;
-};
-
-class WriterThread
-{
-public:
-    WriterThread(Network& network)
-        : m_running(true)
-        , m_network(network)
-    {
-        m_thread = std::thread([&] { process(); });
-    }
-
-    void notify();
-    void process();
-
-    // Try non-blocking inline send. Returns true if the full message was sent.
-    // Only attempts when the mutex is uncontended and no data is pending for this fd.
-    bool trySend(int fd, MsgPacket& msg);
-
-    void send(int fd, MsgPacket&& msg);
-    void disconnect(int fd);
-
-    void stop();
-
-    void join()
-    {
-        m_thread.join();
-    }
-
-private:
-    std::atomic<bool> m_running;
-    std::atomic<bool> m_hasWork{false};
-    std::mutex m_mutex;
-    std::condition_variable_any m_cv;
-    std::thread m_thread;
-
-    HashMapT<int, WriteBuffer> m_bufferMap;
-
-    Network& m_network;
-
-    CREATE_LOGGER("WriterThread");
 };
 
 class Network
@@ -291,6 +250,7 @@ public:
     bool progressConnection(int fd);
     bool isConnectionReady(int fd) const;
     bool requiresConnectionProgress(int fd) const;
+    bool hasTLS(int fd) const;
     ssize_t readConnection(int fd, void* buf, size_t len);
     ssize_t writeConnection(int fd, const void* buf, size_t len);
     void removeConnection(int fd);
@@ -304,8 +264,6 @@ private:
         std::atomic<bool> m_ready = false;
         std::mutex m_mutex;
     };
-
-    void run();
 
     bool accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor);
     bool createTLSConnection(int fd, const SessionSettings& settings, bool serverMode, const std::string& serverName);
@@ -322,20 +280,13 @@ private:
     HashMapT<std::string, std::shared_ptr<SSL_CTX>> m_tlsContexts;
     std::atomic<bool> m_hasTLSConnections = false;
 
-    int m_epollFD;
-
     size_t m_readerThreadCount;
     std::vector<std::unique_ptr<ReaderThread>> m_readerThreads;
 
-    size_t m_writerThreadCount;
-    std::vector<std::unique_ptr<WriterThread>> m_writerThreads;
-
     std::atomic<bool> m_running;
-    std::thread m_thread;
 
     CREATE_LOGGER("Network");
 
     friend class ReaderThread;
-    friend class WriterThread;
     friend class ConnectionHandle;
 };

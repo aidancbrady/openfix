@@ -196,7 +196,6 @@ private:
 struct PlatformSettings : StaticConfig<PlatformSettings>
 {
     static inline ConfigItem<long> READER_THREADS = createLong("InputThreads", 1L);
-    static inline ConfigItem<long> WRITER_THREADS = createLong("WriterThreads", 1L);
     static inline ConfigItem<long> DISPATCHER_THREADS = createLong("DispatcherThreads", 1L);
     static inline ConfigItem<bool> DISPATCHER_SPIN = createBool("DispatcherSpin", true);
 

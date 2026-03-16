@@ -47,15 +47,7 @@ std::unique_ptr<WriterInstance>& FileWriter::createInstance(const std::string& f
 
 void FileWriter::process()
 {
-    while (m_enabled.load(std::memory_order_acquire)) {
-        std::unique_lock lock(m_mutex);
-        m_cv.wait(lock);
-
-        // we might have received a shutdown call
-        if (!m_enabled.load(std::memory_order_acquire))
-            return;
-
-        // find instances ready for writing
+    auto flushInstances = [&]() {
         for (auto& [_, instancePtr] : m_instances) {
             auto& instance = *instancePtr;
             // swap buffers
@@ -122,6 +114,20 @@ void FileWriter::process()
             // clear the buffer
             instance.m_buffer.clear();
         }
+    };
+
+    while (true) {
+        {
+            std::unique_lock lock(m_mutex);
+            m_cv.wait(lock, [&]() { return !m_enabled.load(std::memory_order_acquire) || std::any_of(m_instances.begin(), m_instances.end(), [](const auto& p) {
+                return !p.second->m_queue.empty() || !p.second->m_logEntryQueue.empty() || p.second->m_shouldReset.load(std::memory_order_acquire);
+            }); });
+        }
+
+        flushInstances();
+
+        if (!m_enabled.load(std::memory_order_acquire))
+            return;
     }
 }
 

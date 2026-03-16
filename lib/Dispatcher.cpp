@@ -16,6 +16,11 @@ Dispatcher::Dispatcher(size_t threads, bool spin)
 
 Dispatcher::~Dispatcher()
 {
+    stop();
+}
+
+void Dispatcher::stop()
+{
     for (auto& worker : m_workers)
         worker->stop();
     for (auto& worker : m_workers)

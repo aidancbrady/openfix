@@ -10,8 +10,10 @@
 #include <poll.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -34,15 +36,13 @@ const std::string TARGET_COMP_ID_PATTERN = Utils::buildTagPattern(FIELD::TargetC
 const std::string CHECKSUM_PATTERN = Utils::buildTagPattern(FIELD::CheckSum);
 
 Network::Network()
-    : m_epollFD(-1)
-    , m_running(false)
+    : m_running(false)
 {
     static const int init_result = OPENSSL_init_ssl(0, nullptr);
     if (init_result != 1) {
         throw std::runtime_error("Failed to initialize OpenSSL");
     }
 
-    m_writerThreadCount = PlatformSettings::getLong(PlatformSettings::WRITER_THREADS);
     m_readerThreadCount = PlatformSettings::getLong(PlatformSettings::READER_THREADS);
 }
 
@@ -95,20 +95,10 @@ void Network::start()
 
     LOG_INFO("Starting...");
 
-    m_epollFD = epoll_create1(0);
-    if (m_epollFD == -1) {
-        throw std::runtime_error("Couldn't initialize epoll: " + std::string(strerror(errno)));
-    }
-
     for (size_t i = 0; i < m_readerThreadCount; ++i)
         m_readerThreads.push_back(std::make_unique<ReaderThread>(*this));
 
-    for (size_t i = 0; i < m_writerThreadCount; ++i)
-        m_writerThreads.push_back(std::make_unique<WriterThread>(*this));
-
     LOG_INFO("Started, now running.");
-
-    m_thread = std::thread([&] { run(); });
 }
 
 void Network::stop()
@@ -119,24 +109,13 @@ void Network::stop()
 
     LOG_INFO("Stopping...");
 
-    m_running.store(false, std::memory_order_release);
-
-    // join the epoll thread first so it stops dispatching to reader/writer threads
-    m_thread.join();
-
-    // wait for all threads to timeout and terminate
     for (auto& thread : m_readerThreads)
-        thread->stop();
-    for (auto& thread : m_writerThreads)
         thread->stop();
 
     for (auto& thread : m_readerThreads)
-        thread->join();
-    for (auto& thread : m_writerThreads)
         thread->join();
 
     m_readerThreads.clear();
-    m_writerThreads.clear();
 
     {
         std::lock_guard lock(m_tlsMutex);
@@ -149,9 +128,6 @@ void Network::stop()
         m_tlsContexts.clear();
         m_hasTLSConnections.store(false, std::memory_order_release);
     }
-
-    // finally, close epoll FD
-    close(m_epollFD);
 
     LOG_INFO("Stopped.");
 }
@@ -244,23 +220,14 @@ bool Network::connect(const SessionSettings& settings, const std::shared_ptr<Net
             }
         }
 
-        if (!m_readerThreads[fd % m_readerThreadCount]->addConnection(handler, fd)) {
+        auto& reader = *m_readerThreads[fd % m_readerThreadCount];
+        if (!reader.addConnection(handler, fd)) {
             removeConnection(fd);
             close(fd);
             return false;
         }
 
-        struct epoll_event event;
-        event.events = EPOLLIN | EPOLLOUT | EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
-        event.data.fd = fd;
-
-        if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
-            LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
-            removeConnection(fd);
-            close(fd);
-            return false;
-        }
-
+        reader.registerFD(fd);
         return true;
     }
 
@@ -322,18 +289,15 @@ bool Network::addAcceptor(const SessionSettings& settings, const std::shared_ptr
             return false;
         }
 
-        struct epoll_event event;
-        event.events = EPOLLIN | EPOLLERR | EPOLLET;  // server socket should only notify once (ET)
-        event.data.fd = fd;
-
-        if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
-            LOG_ERROR("Couldn't add listen socket to epoll wait list: " << strerror(errno));
-            ::close(fd);
-            return false;
-        }
-
         // add to port->fd map
         m_acceptors[port] = fd;
+
+        // register listen socket with owning reader's epoll (EPOLLIN only, ET)
+        auto& reader = *m_readerThreads[fd % m_readerThreadCount];
+        reader.addAcceptor(handler, settings.getSessionID(), fd);
+        reader.registerFD(fd);
+
+        return true;
     }
 
     m_readerThreads[fd % m_readerThreadCount]->addAcceptor(handler, settings.getSessionID(), fd);
@@ -365,64 +329,6 @@ bool Network::removeAcceptor(const SessionSettings& settings)
     }
 
     return true;
-}
-
-void Network::run()
-{
-    struct epoll_event events[EVENT_BUF_SIZE];
-
-    int numEvents;
-    const long timeout = PlatformSettings::getLong(PlatformSettings::EPOLL_TIMEOUT);
-
-    while (m_running) {
-        while ((numEvents = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout)) != 0) {
-            if (numEvents < 0) {
-                if (errno == EINTR) {
-                    LOG_WARN("epoll_wait was interrupted by a signal.");
-                    continue;  // retry, no biggie
-                }
-
-                LOG_ERROR("epoll_wait error: " << strerror(errno));
-                break;
-            }
-
-            for (int i = 0; i < numEvents; i++) {
-                const int fd = events[i].data.fd;
-                const uint32_t event_mask = events[i].events;
-
-                if (event_mask & EPOLLERR) {
-                    int err = 0;
-                    socklen_t len = sizeof(err);
-                    if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0) {
-                        LOG_ERROR("EPOLLERR on fd=" << fd << ", error: " << strerror(err));
-                    } else {
-                        LOG_ERROR("EPOLLERR on fd=" << fd << ", and getsockopt failed to get error.");
-                    }
-                }
-                if (event_mask & EPOLLIN) {
-                    LOG_TRACE("data callback for fd=" << fd);
-
-                    // data received
-                    m_readerThreads[fd % m_readerThreadCount]->queue(fd);
-                }
-                if (event_mask & EPOLLOUT) {
-                    LOG_TRACE("write callback for fd=" << fd);
-
-                    // ready to write
-                    m_writerThreads[fd % m_writerThreadCount]->notify();
-
-                    if (requiresConnectionProgress(fd))
-                        m_readerThreads[fd % m_readerThreadCount]->queue(fd);
-                }
-                if (event_mask & (EPOLLRDHUP | EPOLLHUP)) {
-                    LOG_INFO("disconnect callback for fd=" << fd);
-                    // connection hangup
-                    m_readerThreads[fd % m_readerThreadCount]->disconnect(fd);
-                    m_writerThreads[fd % m_writerThreadCount]->disconnect(fd);
-                }
-            }
-        }
-    }
 }
 
 bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
@@ -457,19 +363,12 @@ bool Network::accept(int server_fd, const std::shared_ptr<Acceptor>& acceptor)
         }
     }
 
-    struct epoll_event event;
-    event.events = EPOLLIN | EPOLLOUT | EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
-    event.data.fd = fd;
-
-    if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
-        LOG_WARN("Failed to register connection with epoll: " << strerror(errno));
-        removeConnection(fd);
-        ::close(fd);
-        return false;
-    }
-
     LOG_INFO("Accepted new connection from fd=" << fd << " on server fd=" << server_fd << ": " << address);
-    m_readerThreads[fd % m_readerThreads.size()]->accept(fd, acceptor);
+
+    // Register with the owning reader: unknown connection first, then epoll
+    auto& reader = *m_readerThreads[fd % m_readerThreads.size()];
+    reader.accept(fd, acceptor);
+    reader.registerFD(fd);
 
     return true;
 }
@@ -693,6 +592,15 @@ bool Network::requiresConnectionProgress(int fd) const
     return !it->second->m_ready.load(std::memory_order_acquire);
 }
 
+bool Network::hasTLS(int fd) const
+{
+    if (!m_hasTLSConnections.load(std::memory_order_acquire))
+        return false;
+
+    std::shared_lock lock(m_tlsMutex);
+    return m_tlsConnections.find(fd) != m_tlsConnections.end();
+}
+
 ssize_t Network::readConnection(int fd, void* buf, size_t len)
 {
     if (!m_hasTLSConnections.load(std::memory_order_acquire))
@@ -790,67 +698,126 @@ void Network::removeConnection(int fd)
 //              ReaderThread              //
 ////////////////////////////////////////////
 
-void ReaderThread::queue(int fd)
+ReaderThread::ReaderThread(Network& network)
+    : m_running(true)
+    , m_buffer(network)
+    , m_network(network)
 {
-    // lock as we insert to ensure data change is propogated to reader thread
-    // we don't need to lock as we process
-    {
-        std::lock_guard lock(m_mutex);
-        m_readyFDs.enqueue(fd);
-    }
+    m_epollFD = epoll_create1(0);
+    if (m_epollFD == -1)
+        throw std::runtime_error("ReaderThread: epoll_create1 failed: " + std::string(strerror(errno)));
 
-    m_cv.notify_one();
+    m_eventFD = eventfd(0, EFD_NONBLOCK);
+    if (m_eventFD == -1)
+        throw std::runtime_error("ReaderThread: eventfd failed: " + std::string(strerror(errno)));
+
+    // Register eventfd with level-triggered (not ET) so we never miss a wakeup
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.fd = m_eventFD;
+    if (epoll_ctl(m_epollFD, EPOLL_CTL_ADD, m_eventFD, &ev) < 0)
+        throw std::runtime_error("ReaderThread: failed to register eventfd: " + std::string(strerror(errno)));
+
+    m_thread = std::thread([&] { process(); });
 }
 
-void ReaderThread::disconnect(int fd)
+ReaderThread::~ReaderThread()
 {
-    std::lock_guard lock(m_mutex);
-    // immediately close the socket
-    ::close(fd);
-    m_network.removeConnection(fd);
-    m_buffer.clear(fd);
-    const auto it = m_connections.find(fd);
-    if (m_connections.find(fd) != m_connections.end()) {
-        LOG_DEBUG("Disconnecting known connection, fd=" << fd);
-        it->second->invalidate();
-        m_connections.erase(fd);
-        return;
-    }
+    if (m_epollFD >= 0)
+        ::close(m_epollFD);
+    if (m_eventFD >= 0)
+        ::close(m_eventFD);
+}
 
-    if (m_unknownConnections.find(fd) != m_unknownConnections.end()) {
-        LOG_DEBUG("Disconnecting unknown connection, fd=" << fd);
-        m_unknownConnections.erase(fd);
-        return;
+void ReaderThread::registerFD(int fd)
+{
+    struct epoll_event event;
+    event.events = EPOLLIN | EPOLLOUT | EPOLLHUP | EPOLLRDHUP | EPOLLERR | EPOLLET;
+    event.data.fd = fd;
+
+    if (::epoll_ctl(m_epollFD, EPOLL_CTL_ADD, fd, &event) < 0) {
+        LOG_WARN("Failed to register fd=" << fd << " with reader epoll: " << strerror(errno));
     }
 }
 
 void ReaderThread::process()
 {
+    struct epoll_event events[EVENT_BUF_SIZE];
+    const long timeout = PlatformSettings::getLong(PlatformSettings::EPOLL_TIMEOUT);
+
     while (m_running.load(std::memory_order_acquire)) {
-        std::unique_lock lock(m_mutex);
-        m_cv.wait(lock, [&]() { return !m_running.load() || m_readyFDs.size_approx() > 0; });
-        lock.unlock();
+        const int n = ::epoll_wait(m_epollFD, events, EVENT_BUF_SIZE, timeout);
 
-        if (!m_running.load(std::memory_order_acquire))
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            LOG_ERROR("epoll_wait error: " << strerror(errno));
             break;
+        }
 
-        int fd;
-        if (!m_readyFDs.try_dequeue(fd))
-            continue;
+        for (int i = 0; i < n; ++i) {
+            const int fd = events[i].data.fd;
+            const uint32_t mask = events[i].events;
 
-        try {
-            process(fd);
-        } catch (const SocketClosedError& e) {
-            LOG_ERROR("Socket is closed, fd=" << fd);
+            // Handle eventfd wakeup: flush pending writes
+            if (fd == m_eventFD) {
+                uint64_t val;
+                ::read(m_eventFD, &val, sizeof(val));
+                flushWrites();
+                continue;
+            }
+
+            // Handle errors
+            if (mask & EPOLLERR) {
+                int err = 0;
+                socklen_t len = sizeof(err);
+                if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0) {
+                    LOG_ERROR("EPOLLERR on fd=" << fd << ", error: " << strerror(err));
+                } else {
+                    LOG_ERROR("EPOLLERR on fd=" << fd << ", and getsockopt failed to get error.");
+                }
+            }
+
+            // Handle disconnect
+            if (mask & (EPOLLHUP | EPOLLRDHUP)) {
+                LOG_INFO("disconnect callback for fd=" << fd);
+                disconnect(fd);
+                continue;
+            }
+
+            // Progress TLS handshake if needed
+            if (m_network.requiresConnectionProgress(fd)) {
+                if (!m_network.progressConnection(fd)) {
+                    disconnect(fd);
+                    continue;
+                }
+                if (m_network.requiresConnectionProgress(fd))
+                    continue;  // still in progress, wait for more events
+            }
+
+            // Handle readable data
+            if (mask & EPOLLIN) {
+                try {
+                    processRead(fd);
+                } catch (const SocketClosedError& e) {
+                    LOG_ERROR("Socket is closed, fd=" << fd);
+                }
+            }
+
+            // Handle writable: flush pending write buffers
+            if (mask & EPOLLOUT) {
+                std::lock_guard lock(m_writeMutex);
+                auto it = m_writeBuffers.find(fd);
+                if (it != m_writeBuffers.end())
+                    flushWrite(fd, it->second);
+            }
         }
     }
 }
 
-void ReaderThread::process(int fd)
+void ReaderThread::processRead(int fd)
 {
     // Fast path: look up the handler under the lock, then release before processing.
-    // This avoids holding m_mutex during socket reads and processMessage callbacks,
-    // allowing new connections to be registered without blocking behind message handling.
     std::shared_ptr<NetworkHandler> handler;
     {
         std::lock_guard lock(m_mutex);
@@ -959,37 +926,41 @@ void ReaderThread::accept(int fd, const std::shared_ptr<Acceptor>& acceptor)
 
 void ReaderThread::stop()
 {
-    {
-        std::lock_guard lock(m_mutex);
-        m_running.store(false, std::memory_order_release);
-    }
+    m_running.store(false, std::memory_order_release);
 
-    m_cv.notify_one();
+    // Wake the reader from epoll_wait via eventfd
+    uint64_t val = 1;
+    ::write(m_eventFD, &val, sizeof(val));
 
     // close open connections
-    for (const auto& [k, conn] : m_connections) {
-        ::close(k);
-        m_network.removeConnection(k);
-        // proper cleanup - maybe improve this in the future
-        conn->invalidate();
-    }
-    // close unknown connections
-    for (const auto& [k, _] : m_unknownConnections) {
-        ::close(k);
-        m_network.removeConnection(k);
-    }
-    // close acceptor sockets
-    for (const auto& [k, _] : m_acceptorSockets) {
-        LOG_DEBUG("Closing acceptor socket, fd=" << k);
-        ::close(k);
-        m_network.removeConnection(k);
-    }
+    {
+        std::lock_guard lock(m_mutex);
+        for (const auto& [k, conn] : m_connections) {
+            ::close(k);
+            m_network.removeConnection(k);
+            conn->invalidate();
+        }
+        for (const auto& [k, _] : m_unknownConnections) {
+            ::close(k);
+            m_network.removeConnection(k);
+        }
+        for (const auto& [k, _] : m_acceptorSockets) {
+            LOG_DEBUG("Closing acceptor socket, fd=" << k);
+            ::close(k);
+            m_network.removeConnection(k);
+        }
 
-    m_connections.clear();
-    m_unknownConnections.clear();
-    m_acceptorSockets.clear();
+        m_connections.clear();
+        m_unknownConnections.clear();
+        m_acceptorSockets.clear();
+    }
 
     m_buffer.clear();
+
+    {
+        std::lock_guard lock(m_writeMutex);
+        m_writeBuffers.clear();
+    }
 }
 
 bool ReaderThread::addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd)
@@ -1032,6 +1003,31 @@ bool ReaderThread::removeAcceptor(const SessionID_T sessionID, int fd)
         return true;
     }
     return false;
+}
+
+void ReaderThread::disconnect(int fd)
+{
+    {
+        std::lock_guard lock(m_mutex);
+        ::close(fd);
+        m_network.removeConnection(fd);
+        m_buffer.clear(fd);
+        const auto it = m_connections.find(fd);
+        if (m_connections.find(fd) != m_connections.end()) {
+            LOG_DEBUG("Disconnecting known connection, fd=" << fd);
+            it->second->invalidate();
+            m_connections.erase(fd);
+        } else if (m_unknownConnections.find(fd) != m_unknownConnections.end()) {
+            LOG_DEBUG("Disconnecting unknown connection, fd=" << fd);
+            m_unknownConnections.erase(fd);
+        }
+    }
+
+    // Clean up write buffers
+    {
+        std::lock_guard lock(m_writeMutex);
+        m_writeBuffers.erase(fd);
+    }
 }
 
 ////////////////////////////////////////////
@@ -1118,105 +1114,21 @@ std::vector<std::string> ReadBuffer::read(int fd)
 }
 
 ////////////////////////////////////////////
-//              WriterThread              //
+//            Write path                  //
 ////////////////////////////////////////////
 
-void WriterThread::notify()
+bool ReaderThread::trySend(int fd, MsgPacket& msg)
 {
-    std::lock_guard lock(m_mutex);
-    m_cv.notify_one();
-}
-
-void WriterThread::process()
-{
-    while (m_running.load(std::memory_order_acquire)) {
-        {
-            std::unique_lock lock(m_mutex);
-            if (!m_hasWork.load(std::memory_order_acquire))
-                m_cv.wait(lock);
-            m_hasWork.store(false, std::memory_order_release);
-        }
-
-        if (!m_running.load(std::memory_order_acquire))
-            return;
-
-        std::vector<std::pair<int, WriteBuffer&>> buffers;
-        {
-            std::unique_lock lock(m_mutex);
-            for (auto& [fd, buffer] : m_bufferMap) {
-                if (!buffer.m_queue.empty())
-                    buffer.m_queue.swap(buffer.m_buffer);
-                if (!buffer.m_meta_queue.empty())
-                    buffer.m_meta_queue.swap(buffer.m_meta_buffer);
-                buffers.emplace_back(fd, buffer);
-            }
-        }
-
-        for (auto& [fd, buffer] : buffers) {
-            if (!buffer.m_valid.load(std::memory_order_acquire)) {
-                std::unique_lock lock(m_mutex);
-                m_bufferMap.erase(fd);
-                continue;
-            }
-
-            if (buffer.m_buffer.empty())
-                continue;
-
-            size_t sent = 0;
-            while (sent < buffer.m_buffer.length()) {
-                const ssize_t ret = m_network.writeConnection(fd, buffer.m_buffer.c_str() + sent, buffer.m_buffer.length() - sent);
-                if (ret < 0) {
-                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                        LOG_ERROR("Failed to send on fd=" << fd << ", will clear buffers: " << strerror(errno));
-                        buffer.m_buffer.clear();
-                        buffer.m_meta_buffer.clear();
-                        break;
-                    }
-                    break;
-                }
-                sent += ret;
-            }
-
-            if (!buffer.m_meta_buffer.empty()) {
-                size_t processed = 0;
-
-                while (!buffer.m_meta_buffer.empty() && processed + buffer.m_meta_buffer.front().m_msg_size <= sent) {
-                    processed += buffer.m_meta_buffer.front().m_msg_size;
-                    if (buffer.m_meta_buffer.front().m_callback)
-                        buffer.m_meta_buffer.front().m_callback();
-                    buffer.m_meta_buffer.erase(buffer.m_meta_buffer.begin());
-                }
-
-                // if sent bytes did not complete the next message and partial data remains
-                if (processed < sent && !buffer.m_meta_buffer.empty()) {
-                    buffer.m_meta_buffer.front().m_msg_size -= (sent - processed);
-                }
-            }
-
-            if (sent < buffer.m_buffer.length()) {
-                // Not all data was sent; store the unsent part back in m_queue for later.
-                std::lock_guard lock(m_mutex);
-                buffer.m_queue.insert(0, buffer.m_buffer.substr(sent));
-                m_hasWork.store(true, std::memory_order_release);
-            }
-
-            buffer.m_buffer.clear();
-        }
-    }
-}
-
-bool WriterThread::trySend(int fd, MsgPacket& msg)
-{
-    std::unique_lock lock(m_mutex, std::try_to_lock);
+    std::unique_lock lock(m_writeMutex, std::try_to_lock);
     if (!lock.owns_lock())
         return false;
 
-    // Only inline send when there's no pending data for this fd — preserves message ordering
-    const auto it = m_bufferMap.find(fd);
-    if (it != m_bufferMap.end()) {
+    // Only inline send when there's no pending data — preserves message ordering
+    const auto it = m_writeBuffers.find(fd);
+    if (it != m_writeBuffers.end()) {
         if (!it->second.m_valid.load(std::memory_order_acquire))
             return false;
-        if (!it->second.m_queue.empty() || !it->second.m_buffer.empty())
+        if (!it->second.m_queue.empty() || !it->second.m_drain.empty())
             return false;
     }
 
@@ -1229,44 +1141,111 @@ bool WriterThread::trySend(int fd, MsgPacket& msg)
     if (ret > 0)
         msg.m_msg.erase(0, ret);
 
-    // EAGAIN / EWOULDBLOCK / partial — caller will queue via send()
     return false;
 }
 
-void WriterThread::send(int fd, MsgPacket&& msg)
+void ReaderThread::queueWrite(int fd, MsgPacket&& msg)
 {
     {
-        std::lock_guard lock(m_mutex);
-        m_hasWork.store(true, std::memory_order_release);
-        m_bufferMap[fd].m_queue.append(msg.m_msg);
-        m_bufferMap[fd].m_meta_queue.push_back(std::move(msg));
+        std::lock_guard lock(m_writeMutex);
+        m_writeBuffers[fd].m_queue.push_back({std::move(msg.m_msg), std::move(msg.m_callback)});
     }
 
-    m_cv.notify_one();
+    // Wake reader to flush
+    uint64_t val = 1;
+    ::write(m_eventFD, &val, sizeof(val));
 }
 
-void WriterThread::disconnect(int fd)
+void ReaderThread::flushWrites()
 {
-    {
-        std::lock_guard lock(m_mutex);
-        LOG_DEBUG("Disconnect received for fd=" << fd << ", clearing send buffer");
-        m_bufferMap[fd].m_valid.store(false, std::memory_order_release);
+    std::lock_guard lock(m_writeMutex);
+    for (auto it = m_writeBuffers.begin(); it != m_writeBuffers.end(); ) {
+        if (!it->second.m_valid.load(std::memory_order_acquire)) {
+            it = m_writeBuffers.erase(it);
+            continue;
+        }
+        flushWrite(it->first, it->second);
+        ++it;
     }
-
-    m_cv.notify_one();
 }
 
-void WriterThread::stop()
+void ReaderThread::flushWrite(int fd, WriteBuffer& wb)
 {
-    {
-        std::lock_guard lock(m_mutex);
-        m_running.store(false, std::memory_order_release);
+    // Swap incoming queue into drain buffer if drain is empty
+    if (wb.m_drain.empty() && !wb.m_queue.empty()) {
+        wb.m_drain.swap(wb.m_queue);
+        wb.m_offset = 0;
     }
 
-    for (const auto& [fd, buf] : m_bufferMap)
-        m_bufferMap[fd].m_valid = false;
+    if (wb.m_drain.empty())
+        return;
 
-    m_cv.notify_one();
+    if (m_network.hasTLS(fd)) {
+        // TLS: write each message individually via SSL_write
+        while (!wb.m_drain.empty()) {
+            auto& entry = wb.m_drain.front();
+            const ssize_t ret = m_network.writeConnection(fd, entry.m_msg.data() + wb.m_offset, entry.m_msg.size() - wb.m_offset);
+            if (ret <= 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    return;
+                LOG_ERROR("TLS write failed during flush on fd=" << fd << ": " << strerror(errno));
+                wb.m_drain.clear();
+                wb.m_queue.clear();
+                return;
+            }
+            wb.m_offset += ret;
+            if (wb.m_offset >= entry.m_msg.size()) {
+                if (entry.m_callback)
+                    entry.m_callback();
+                wb.m_drain.pop_front();
+                wb.m_offset = 0;
+            } else {
+                return;  // partial write, wait for next EPOLLOUT
+            }
+        }
+    } else {
+        // Non-TLS: vectorized send with writev()
+        const int count = static_cast<int>(std::min(wb.m_drain.size(), static_cast<size_t>(MAX_WRITE_IOVECS)));
+        struct iovec iovs[MAX_WRITE_IOVECS];
+
+        for (int i = 0; i < count; ++i) {
+            auto& entry = wb.m_drain[i];
+            if (i == 0) {
+                iovs[i].iov_base = const_cast<char*>(entry.m_msg.data()) + wb.m_offset;
+                iovs[i].iov_len = entry.m_msg.size() - wb.m_offset;
+            } else {
+                iovs[i].iov_base = const_cast<char*>(entry.m_msg.data());
+                iovs[i].iov_len = entry.m_msg.size();
+            }
+        }
+
+        const ssize_t ret = ::writev(fd, iovs, count);
+        if (ret <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                return;
+            LOG_ERROR("writev failed on fd=" << fd << ": " << strerror(errno));
+            wb.m_drain.clear();
+            wb.m_queue.clear();
+            return;
+        }
+
+        // Account for sent bytes, fire callbacks for completed messages
+        size_t sent = static_cast<size_t>(ret);
+        while (!wb.m_drain.empty() && sent > 0) {
+            auto& entry = wb.m_drain.front();
+            const size_t remaining = entry.m_msg.size() - wb.m_offset;
+            if (sent >= remaining) {
+                sent -= remaining;
+                if (entry.m_callback)
+                    entry.m_callback();
+                wb.m_drain.pop_front();
+                wb.m_offset = 0;
+            } else {
+                wb.m_offset += sent;
+                sent = 0;
+            }
+        }
+    }
 }
 
 ////////////////////////////////////////////
@@ -1276,25 +1255,22 @@ void WriterThread::stop()
 void ConnectionHandle::disconnect()
 {
     m_readerThread.disconnect(m_fd);
-    m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount]->disconnect(m_fd);
 }
 
 void ConnectionHandle::send(MsgPacket&& msg)
 {
-    auto& writer = *m_network.m_writerThreads[m_fd % m_network.m_writerThreadCount];
-
-    // Try non-blocking inline send first — avoids the WriterThread hop entirely
-    // when the mutex is uncontended and no data is pending for this fd.
-    // Never blocks: uses try_lock + non-blocking socket write.
-    if (writer.trySend(m_fd, msg)) {
-        // Full send succeeded inline — fire callback outside the lock
-        if (msg.m_callback)
-            msg.m_callback();
-        return;
+    // For non-TLS: try non-blocking inline send from the caller's thread.
+    // For TLS: always queue to reader (SSL objects aren't safe for concurrent read+write).
+    if (!m_network.hasTLS(m_fd)) {
+        if (m_readerThread.trySend(m_fd, msg)) {
+            if (msg.m_callback)
+                msg.m_callback();
+            return;
+        }
     }
 
-    // Fall back to async WriterThread queue (partial sends have already been trimmed)
-    writer.send(m_fd, std::move(msg));
+    // Fall back to reader's write queue
+    m_readerThread.queueWrite(m_fd, std::move(msg));
 }
 
 bool ConnectionHandle::isReady() const
@@ -1331,6 +1307,9 @@ void NetworkHandler::start()
 
 void NetworkHandler::stop()
 {
+    if (m_stopped.exchange(true, std::memory_order_acq_rel))
+        return;
+
     // remove any existing connection
     disconnect();
 

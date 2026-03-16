@@ -53,6 +53,8 @@ public:
 
     ~Dispatcher();
 
+    void stop();
+
     void dispatch(Callback callback);
     void dispatch(Callback callback, int hash);
 

@@ -30,7 +30,6 @@ void Application::start()
         return;
     m_running.store(true, std::memory_order_release);
 
-    m_running.store(true);
     m_logger->start();
     m_store->start();
 
@@ -50,10 +49,15 @@ void Application::stop()
         return;
     m_running.store(false, std::memory_order_release);
 
-    m_logger->stop();
-    m_store->stop();
+    // stop all sessions while network is still alive
+    for (auto& [_, session] : m_sessionMap)
+        session->stop();
 
     m_network->stop();
+    m_dispatcher.stop();
+
+    m_logger->stop();
+    m_store->stop();
 
     m_updateThread.join();
 }

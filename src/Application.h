@@ -42,7 +42,7 @@ private:
 
     Dispatcher m_dispatcher;
 
-    std::atomic<bool> m_running;
+    std::atomic<bool> m_running{false};
 
     std::thread m_updateThread;
 
