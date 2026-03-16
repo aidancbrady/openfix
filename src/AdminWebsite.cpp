@@ -1,5 +1,7 @@
 #include "AdminWebsite.h"
 
+#include <openfix/CpuOrchestrator.h>
+
 #include "Application.h"
 #include "Session.h"
 
@@ -661,6 +663,7 @@ void AdminWebsite::start()
     m_website.loglevel(crow::LogLevel::Warning);
 
     m_thread = std::thread([this](){
+        CpuOrchestrator::bind(ThreadRole::ADMIN);
         m_website.port(m_port).run();
     });
 }

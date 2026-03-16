@@ -1,5 +1,6 @@
 #include "Application.h"
 
+#include <openfix/CpuOrchestrator.h>
 #include <unistd.h>
 
 Application::Application()
@@ -28,6 +29,12 @@ void Application::start()
         return;
     m_running.store(true, std::memory_order_release);
 
+    CpuOrchestrator::initialize(
+        PlatformSettings::getString(PlatformSettings::CPU_CORES),
+        PlatformSettings::getBool(PlatformSettings::CPU_AVOID_HT),
+        static_cast<int>(PlatformSettings::getLong(PlatformSettings::CPU_NUMA_NODE))
+    );
+
     m_logger->start();
     m_store->start();
 
@@ -36,6 +43,7 @@ void Application::start()
     // Background thread handles disconnected session updates (reconnect logic).
     // Connected sessions are updated inline by the ReaderThread via NetworkDelegate.
     m_updateThread = std::thread([&]() {
+        CpuOrchestrator::bind(ThreadRole::UPDATE);
         while (m_running.load(std::memory_order_acquire)) {
             runUpdate();
             ::usleep(PlatformSettings::getLong(PlatformSettings::UPDATE_DELAY) * 1000);

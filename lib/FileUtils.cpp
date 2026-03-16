@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <filesystem>
 
+#include "CpuOrchestrator.h"
+
 #include "Utils.h"
 
 FileWriter::FileWriter()
@@ -17,6 +19,7 @@ FileWriter::~FileWriter()
 void FileWriter::start()
 {
     m_thread = std::thread([&]() {
+        CpuOrchestrator::bind(ThreadRole::FILE_WRITER);
         m_enabled.store(true, std::memory_order_release);
         process();
     });

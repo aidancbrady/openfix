@@ -207,6 +207,11 @@ struct PlatformSettings : StaticConfig<PlatformSettings>
     static inline ConfigItem<std::string> DATA_PATH = createString("DataPath", "./data");
 
     static inline ConfigItem<long> ADMIN_WEBSITE_PORT = createLong("AdminWebsitePort", 51234);
+
+    // CPU affinity settings
+    static inline ConfigItem<std::string> CPU_CORES = createString("CpuCores");         // explicit core list, e.g. "2,3,4,5"
+    static inline ConfigItem<bool> CPU_AVOID_HT = createBool("CpuAvoidHT", false);      // auto-detect physical cores, skip HT siblings
+    static inline ConfigItem<long> CPU_NUMA_NODE = createLong("CpuNumaNode", -1L);       // NUMA node (-1 = auto-detect best node)
 };
 
 struct SessionSettings : Config<SessionSettings>

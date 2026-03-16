@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 
+#include "CpuOrchestrator.h"
 #include "Log.h"
 #include "Types.h"
 
@@ -23,7 +24,10 @@ public:
         : m_stop(false)
         , m_spin(spin)
     {
-        m_thread = std::thread([this] { run(); });
+        m_thread = std::thread([this] {
+            CpuOrchestrator::bind(ThreadRole::WORKER);
+            run();
+        });
     }
 
     void run();

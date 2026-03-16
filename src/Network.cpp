@@ -6,6 +6,7 @@
 #include <netinet/tcp.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openfix/CpuOrchestrator.h>
 #include <openfix/Utils.h>
 #include <poll.h>
 #include <string.h>
@@ -718,7 +719,10 @@ ReaderThread::ReaderThread(Network& network)
     if (epoll_ctl(m_epollFD, EPOLL_CTL_ADD, m_eventFD, &ev) < 0)
         throw std::runtime_error("ReaderThread: failed to register eventfd: " + std::string(strerror(errno)));
 
-    m_thread = std::thread([&] { process(); });
+    m_thread = std::thread([&] {
+        CpuOrchestrator::bind(ThreadRole::READER);
+        process();
+    });
 }
 
 ReaderThread::~ReaderThread()

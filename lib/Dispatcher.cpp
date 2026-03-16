@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 
+#include "CpuOrchestrator.h"
 #include "Utils.h"
 
 ////////////////////////////////////////////
@@ -100,7 +101,10 @@ Timer::Timer()
     : m_stop(false)
     , m_timerCount(0)
 {
-    m_thread = std::thread([&]() { run(); });
+    m_thread = std::thread([&]() {
+        CpuOrchestrator::bind(ThreadRole::TIMER);
+        run();
+    });
 }
 
 Timer::~Timer()
