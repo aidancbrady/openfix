@@ -196,8 +196,6 @@ private:
 struct PlatformSettings : StaticConfig<PlatformSettings>
 {
     static inline ConfigItem<long> READER_THREADS = createLong("InputThreads", 1L);
-    static inline ConfigItem<long> DISPATCHER_THREADS = createLong("DispatcherThreads", 1L);
-    static inline ConfigItem<bool> DISPATCHER_SPIN = createBool("DispatcherSpin", true);
 
     static inline ConfigItem<long> SOCKET_SEND_BUF_SIZE = createLong("SocketSendBufSize");
     static inline ConfigItem<long> SOCKET_RECV_BUF_SIZE = createLong("SocketRecvBufSize");

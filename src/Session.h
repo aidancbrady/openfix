@@ -1,10 +1,8 @@
 #pragma once
 
-#include <openfix/Dispatcher.h>
 #include <openfix/Log.h>
 
 #include <atomic>
-#include <functional>
 #include <memory>
 
 #include "Config.h"
@@ -36,11 +34,10 @@ struct SessionDelegate
     virtual void onLogout(Session& session) {}
 };
 
-class Session
+class Session : public NetworkDelegate
 {
 public:
-    Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store,
-            Dispatcher& dispatcher, int dispatchHash);
+    Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store);
     ~Session();
 
     void start();
@@ -87,14 +84,16 @@ public:
         return m_state;
     }
 
-    void runUpdate();
-
     Message createMessage(const std::string& msgType) const
     {
         return m_dictionary->create(msgType);
     }
 
     void send(Message& msg, SendCallback_T callback = SendCallback_T());
+
+    // NetworkDelegate — called directly by ReaderThread, no dispatch queue
+    void onNetworkMessage(std::string text) override;
+    void onNetworkUpdate() override;
 
 private:
     bool load();
@@ -104,12 +103,11 @@ private:
     void runMessageRecovery(int from, int to);
 
     void internal_update();
-    
+
     void internal_send(const Message& msg, SendCallback_T callback);
     void internal_send(std::string msg, SendCallback_T callback);
 
 private:
-    void onMessage(std::string msg);
     void processMessage(const Message& msg, long time);
 
     bool validateMessage(const Message& msg, long time);
@@ -147,9 +145,6 @@ private:
 
     std::atomic<bool> m_enabled;
 
-    Dispatcher& m_dispatcher;
-    int m_dispatchHash;
-
     long m_lastSentHeartbeat = 0;
     long m_lastRecvHeartbeat = 0;
     long m_lastSentTestRequest = 0;
@@ -162,6 +157,8 @@ private:
 
     long m_lastReconnect = 0;
     long m_reconnectInterval = 0;
+
+    long m_lastUpdate = 0;
 
     long m_testReqID = 0;
 

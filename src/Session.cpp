@@ -7,14 +7,11 @@
 #include "Fields.h"
 #include "Messages.h"
 
-Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store,
-                 Dispatcher& dispatcher, int dispatchHash)
+Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store)
     : m_settings(settings)
     , m_logger(logger->createLogger(settings))
     , m_state(SessionState::LOGON)
     , m_enabled(true)
-    , m_dispatcher(dispatcher)
-    , m_dispatchHash(dispatchHash)
 {
     m_dictionary = DictionaryRegistry::instance().load(settings.getString(SessionSettings::FIX_DICTIONARY));
     m_cache = std::make_unique<MemoryCache>(m_settings, m_dictionary, store);
@@ -23,7 +20,7 @@ Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFI
     m_logonInterval = settings.getLong(SessionSettings::LOGON_INTERVAL) * 1000;
     m_reconnectInterval = settings.getLong(SessionSettings::RECONNECT_INTERVAL) * 1000;
 
-    m_network = std::make_shared<NetworkHandler>(m_settings, network, std::bind(&Session::onMessage, this, std::placeholders::_1));
+    m_network = std::make_shared<NetworkHandler>(m_settings, network, this);
 
     // load from store
     load();
@@ -37,7 +34,6 @@ Session::~Session()
 void Session::start()
 {
     m_enabled.store(true, std::memory_order_release);
-    runUpdate();
 }
 
 void Session::stop()
@@ -46,38 +42,34 @@ void Session::stop()
     m_network->stop();
 }
 
-void Session::onMessage(std::string text)
+void Session::onNetworkMessage(std::string text)
 {
-    m_dispatcher.dispatch([this, text = std::move(text)]() mutable {
-        if (m_state == SessionState::KILLING) {
-            LOG_WARN("Received message while killing session, ignoring");
-            return;
+    if (m_state == SessionState::KILLING)
+        return;
+
+    try {
+        // parse message; move text to avoid a copy (parse takes by value)
+        const auto msg = m_dictionary->parse(m_settings, std::move(text));
+        m_logger.logMessage(msg.getSourceText(), Direction::INBOUND);
+
+        LOG_DEBUG("Received: " << msg);
+
+        const auto time = Utils::getEpochMillis();
+        m_lastRecvHeartbeat = time;
+
+        processMessage(msg, time);
+
+        // handle inbound queue
+        auto& queue = m_cache->getInboundQueue();
+        while (!queue.empty() && getTargetSeqNum() == queue.begin()->first) {
+            processMessage(queue.begin()->second, time);
+            queue.erase(queue.begin());
         }
-
-        try {
-            // parse message; move text to avoid a copy (parse takes by value)
-            const auto msg = m_dictionary->parse(m_settings, std::move(text));
-            m_logger.logMessage(msg.getSourceText(), Direction::INBOUND);
-
-            LOG_DEBUG("Received: " << msg);
-
-            const auto time = Utils::getEpochMillis();
-            m_lastRecvHeartbeat = time;
-
-            processMessage(msg, time);
-
-            // handle inbound queue
-            auto& queue = m_cache->getInboundQueue();
-            while (!queue.empty() && getTargetSeqNum() == queue.begin()->first) {
-                processMessage(queue.begin()->second, time);
-                queue.erase(queue.begin());
-            }
-        } catch (const MessageParsingError& e) {
-            LOG_ERROR("Error while parsing message: " << e.what());
-        } catch (...) {
-            LOG_ERROR("Unknown error while handling message!");
-        }
-    }, m_dispatchHash);
+    } catch (const MessageParsingError& e) {
+        LOG_ERROR("Error while parsing message: " << e.what());
+    } catch (...) {
+        LOG_ERROR("Unknown error while handling message!");
+    }
 }
 
 void Session::processMessage(const Message& msg, long time)
@@ -166,15 +158,18 @@ void Session::internal_send(std::string msg, SendCallback_T callback)
     }
 }
 
-void Session::runUpdate()
+void Session::onNetworkUpdate()
 {
-    m_dispatcher.dispatch([this] {
-        try {
-            internal_update();
-        } catch (...) {
-            LOG_ERROR("Error during update loop!");
-        }
-    }, m_dispatchHash);
+    const long now = Utils::getEpochMillis();
+    if ((now - m_lastUpdate) < 1)
+        return;
+    m_lastUpdate = now;
+
+    try {
+        internal_update();
+    } catch (...) {
+        LOG_ERROR("Error during update loop!");
+    }
 }
 
 void Session::internal_update()

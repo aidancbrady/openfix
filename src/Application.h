@@ -9,7 +9,6 @@
 #include "FIXStore.h"
 #include "Network.h"
 #include "Session.h"
-#include "lib/Dispatcher.h"
 
 class Application
 {
@@ -39,8 +38,6 @@ private:
     std::shared_ptr<IFIXStore> m_store;
 
     std::unique_ptr<Network> m_network;
-
-    Dispatcher m_dispatcher;
 
     std::atomic<bool> m_running{false};
 

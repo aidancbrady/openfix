@@ -812,6 +812,10 @@ void ReaderThread::process()
                     flushWrite(fd, it->second);
             }
         }
+
+        // Tick all connected sessions (time-gated internally)
+        for (const auto& [_, handler] : m_connections)
+            handler->update();
     }
 }
 
@@ -1326,7 +1330,12 @@ void NetworkHandler::setSocketSettings(int fd)
 
 void NetworkHandler::processMessage(std::string msg)
 {
-    m_callback(std::move(msg));
+    m_delegate->onNetworkMessage(std::move(msg));
+}
+
+void NetworkHandler::update()
+{
+    m_delegate->onNetworkUpdate();
 }
 
 void NetworkHandler::send(MsgPacket&& msg)

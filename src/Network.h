@@ -30,6 +30,13 @@ struct MsgPacket
     SendCallback_T m_callback;
 };
 
+struct NetworkDelegate
+{
+    virtual ~NetworkDelegate() = default;
+    virtual void onNetworkMessage(std::string text) = 0;
+    virtual void onNetworkUpdate() = 0;
+};
+
 class ConnectionHandle
 {
 public:
@@ -58,12 +65,10 @@ private:
 class NetworkHandler : public std::enable_shared_from_this<NetworkHandler>
 {
 public:
-    using MessageCallback_T = std::function<void(std::string)>;
-
-    NetworkHandler(const SessionSettings& settings, Network& network, MessageCallback_T callback)
+    NetworkHandler(const SessionSettings& settings, Network& network, NetworkDelegate* delegate)
         : m_settings(settings)
         , m_network(network)
-        , m_callback(std::move(callback))
+        , m_delegate(delegate)
         , m_valid(true)
         , m_stopped(false)
     {}
@@ -76,11 +81,13 @@ public:
     void setSocketSettings(int fd);
 
     void processMessage(std::string msg);
+    void update();
     void send(MsgPacket&& msg);
 
     void disconnect();
     void setConnection(std::shared_ptr<ConnectionHandle> connection);
     bool isConnected();
+
     const SessionSettings& getSettings() const
     {
         return m_settings;
@@ -91,7 +98,7 @@ public:
 private:
     const SessionSettings& m_settings;
     Network& m_network;
-    MessageCallback_T m_callback;
+    NetworkDelegate* m_delegate;
 
     std::recursive_mutex m_mutex;
     std::shared_ptr<ConnectionHandle> m_connection;
