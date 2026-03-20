@@ -179,10 +179,7 @@ struct WriteBuffer
         return *this;
     }
 
-    // Queue: populated by external threads (under ReaderThread::m_writeMutex)
     std::deque<WriteEntry> m_queue;
-
-    // Drain buffer: swapped from queue, only touched by reader thread
     std::deque<WriteEntry> m_drain;
     size_t m_offset = 0;  // byte offset into first entry for partial sends
 
@@ -230,7 +227,7 @@ private:
     int m_epollFD;
     int m_eventFD;
 
-    // Write buffers: fd -> buffer (m_writeMutex protects m_queue insertion)
+    // write buffers: fd -> buffer (m_writeMutex protects m_queue insertion)
     std::mutex m_writeMutex;
     HashMapT<int, WriteBuffer> m_writeBuffers;
 

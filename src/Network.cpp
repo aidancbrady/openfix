@@ -766,7 +766,7 @@ void ReaderThread::process()
             // Handle eventfd wakeup: flush pending writes
             if (fd == m_eventFD) {
                 uint64_t val;
-                (void)::read(m_eventFD, &val, sizeof(val));
+                ::read(m_eventFD, &val, sizeof(val));
                 flushWrites();
                 continue;
             }
@@ -817,36 +817,51 @@ void ReaderThread::process()
             }
         }
 
-        // Tick all connected sessions (time-gated internally)
-        for (const auto& [_, handler] : m_connections)
+        // Tick all connected sessions (time-gated internally).
+        // Snapshot under the lock: update() can re-enter network code and
+        // mutate m_connections, which would invalidate the iterator.
+        std::vector<std::shared_ptr<NetworkHandler>> handlers;
+        {
+            std::lock_guard lock(m_mutex);
+            handlers.reserve(m_connections.size());
+            for (const auto& [_, handler] : m_connections)
+                handlers.push_back(handler);
+        }
+        for (const auto& handler : handlers)
             handler->update();
     }
+
+    // Reader thread is exiting — safe to clear buffers with no concurrent access
+    m_buffer.clear();
 }
 
 void ReaderThread::processRead(int fd)
 {
-    // Fast path: look up the handler under the lock, then release before processing.
+    // Fast path: look up the handler and read data under the lock, then release
+    // before message processing. The lock must cover m_buffer.read(fd) because
+    // external disconnect() can erase from m_bufferMap under m_mutex — without
+    // the lock, read()'s reference into the map would dangle.
+    //
     // Raw pointer is safe here: the Session holds a shared_ptr to the NetworkHandler,
     // so it stays alive for the duration of message processing on the reader thread.
-    //
-    // TLS progress is handled by the caller (process() loop) before calling processRead,
-    // so we don't recheck it here.
     NetworkHandler* handler = nullptr;
+    std::vector<std::string>* msgs = nullptr;
     {
         std::lock_guard lock(m_mutex);
 
-        auto it = m_connections.find(fd);
+        const auto it = m_connections.find(fd);
         if (it != m_connections.end()) {
             handler = it->second.get();
+            msgs = &m_buffer.read(fd);
         }
     }
 
-    // Known connection: read + process outside the lock
+    // Known connection: process outside the lock (msgs points to m_readResult,
+    // which is stable until the next read() call — only happens on this thread)
     if (handler) {
         LOG_TRACE("Handling data for known connection on fd=" << fd);
 
-        auto& msgs = m_buffer.read(fd);
-        for (auto& msg : msgs)
+        for (auto& msg : *msgs)
             handler->processMessage(std::move(msg));
 
         return;
@@ -938,7 +953,7 @@ void ReaderThread::stop()
 
     // Wake the reader from epoll_wait via eventfd
     uint64_t val = 1;
-    (void)::write(m_eventFD, &val, sizeof(val));
+    ::write(m_eventFD, &val, sizeof(val));
 
     // close open connections
     {
@@ -962,8 +977,6 @@ void ReaderThread::stop()
         m_unknownConnections.clear();
         m_acceptorSockets.clear();
     }
-
-    m_buffer.clear();
 
     {
         std::lock_guard lock(m_writeMutex);
@@ -1140,7 +1153,7 @@ bool ReaderThread::trySend(int fd, MsgPacket& msg)
     if (!lock.owns_lock())
         return false;
 
-    // Only inline send when there's no pending data — preserves message ordering
+    // only inline send when there's no pending data — preserves message ordering
     const auto it = m_writeBuffers.find(fd);
     if (it != m_writeBuffers.end()) {
         if (!it->second.m_valid.load(std::memory_order_acquire))
@@ -1154,7 +1167,7 @@ bool ReaderThread::trySend(int fd, MsgPacket& msg)
     if (ret == static_cast<ssize_t>(msg.m_msg.size()))
         return true;
 
-    // Partial send — trim what was sent so the caller queues only the remainder
+    // partial send — trim what was sent so the caller queues only the remainder
     if (ret > 0)
         msg.m_msg.erase(0, ret);
 
@@ -1170,7 +1183,7 @@ void ReaderThread::queueWrite(int fd, MsgPacket&& msg)
 
     // wake reader to flush
     uint64_t val = 1;
-    (void)::write(m_eventFD, &val, sizeof(val));
+    ::write(m_eventFD, &val, sizeof(val));
 }
 
 void ReaderThread::flushWrites()

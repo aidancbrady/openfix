@@ -181,9 +181,9 @@ Recent isolated run on Linux (x86_64), optimized build (`-c opt`), primary cores
 
 | Benchmark | openfix | QuickFIX | Result |
 |---|---|---|---|
-| Throughput (median, msg/s) | **3,307,610** | 473,981 | **openfix 7.0x higher** |
-| RoundTrip TestReq-HB (median avg, µs) | **13.887** | 50.295 | **openfix 72.4% lower** |
-| RoundTrip Multileg-AB-8 (median avg, µs) | **33.368** | 56.029 | **openfix 40.4% lower** |
+| Throughput (median, msg/s) | **2,905,193** | 582,655 | **openfix 5.0x higher** |
+| RoundTrip TestReq-HB (median avg, µs) | **8.145** | 11.035 | **openfix 26.2% lower** |
+| RoundTrip Multileg-AB-8 (median avg, µs) | **10.088** | 15.128 | **openfix 33.3% lower** |
 
 openfix leads across all three network benchmarks — aggregate throughput, simple `TestRequest -> Heartbeat` round trip, and the multileg application-flow round trip. Exact numbers will vary with CPU governor, kernel scheduling, and whether the script is run with `sudo`.
 
@@ -191,11 +191,11 @@ openfix leads across all three network benchmarks — aggregate throughput, simp
 
 #### CPU (parse and serialize, no network I/O)
 
-| Benchmark | Msgs/sec | Avg Latency (µs) |
-|---|---|---|
-| Parse/Heartbeat | **5,935,796** | 0.168 |
-| Parse/NewOrderSingle | **4,254,352** | 0.235 |
-| Serialize/Heartbeat | **4,924,435** | 0.203 |
-| Serialize/NewOrderSingle | **2,756,231** | 0.363 |
+Recent CPU-only run on this machine: optimized build (`-c opt`), `taskset -c 0`, 5 iterations per engine, median values reported.
 
-Parse throughput benefits from `memchr`-based SIMD field scanning, O(1) flat-array lookups for field types and group specs, bitset-accelerated duplicate detection, and zero-copy `string_view` storage. Serialize uses pre-computed tag string tables, zero-copy `string_view` field insertion for session-constant headers, single-allocation field storage, and thread-local buffer reuse to minimize allocations on the outbound path. The round-trip path merges all clock reads into a single `clock_gettime` call per message cycle, caches TLS state on connection handles, uses `HashMapT` for O(1) message caching, defers persistent store writes to a periodic flush to keep the send path lock-free, and uses `std::mutex` with deferred callback invocation on the network handler to avoid recursive mutex overhead.
+| Benchmark | openfix Msgs/sec | QuickFIX Msgs/sec | openfix Avg (µs) | QuickFIX Avg (µs) | Result |
+|---|---|---|---|---|---|
+| Parse/Heartbeat | **6,037,725** | 2,692,040 | **0.166** | 0.371 | **openfix 2.24x higher throughput, 55.3% lower avg latency** |
+| Parse/NewOrderSingle | **4,282,808** | 1,343,856 | **0.233** | 0.744 | **openfix 3.19x higher throughput, 68.7% lower avg latency** |
+| Serialize/Heartbeat | **4,914,196** | 2,390,644 | **0.203** | 0.418 | **openfix 2.06x higher throughput, 51.4% lower avg latency** |
+| Serialize/NewOrderSingle | **2,734,727** | 1,311,477 | **0.366** | 0.762 | **openfix 2.09x higher throughput, 52.0% lower avg latency** |
