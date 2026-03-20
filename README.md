@@ -187,8 +187,6 @@ Recent isolated run on Linux (x86_64), optimized build (`-c opt`), primary cores
 
 openfix leads across all three network benchmarks — aggregate throughput, simple `TestRequest -> Heartbeat` round trip, and the multileg application-flow round trip. Exact numbers will vary with CPU governor, kernel scheduling, and whether the script is run with `sudo`.
 
-> **Note:** For the most stable results, run the isolated benchmark script with `sudo` to enable CPU frequency pinning: `sudo ./test/performance/run_isolated.sh`. The round-trip latency numbers above reflect a non-pinned run; with frequency pinning and CPU isolation, typical TestReq-HB round-trip averages are in the **8–9 µs** range.
-
 #### CPU (parse and serialize, no network I/O)
 
 Recent CPU-only run on this machine: optimized build (`-c opt`), `taskset -c 0`, 5 iterations per engine, median values reported.
