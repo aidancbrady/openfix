@@ -67,6 +67,7 @@ TEST_F(MessageTest, OrderedFields)
 {
     SessionSettings settings;
     settings.setBool(SessionSettings::RELAXED_PARSING, true);
+    settings.setBool(SessionSettings::PARSING_REORDER_TAGS, true);
     std::string fix = "34=3|56=TARGET|49=SENDER|35=0|11=TEST|13=TEST|12=TEST|";
     const std::string ordered = "9=54|35=0|49=SENDER|56=TARGET|34=3|11=TEST|13=TEST|12=TEST|10=013|";
     const auto msg = dict->parse(settings, convert(fix));

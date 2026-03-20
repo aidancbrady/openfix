@@ -40,13 +40,16 @@ struct NetworkDelegate
 class ConnectionHandle
 {
 public:
-    ConnectionHandle(Network& network, ReaderThread& readerThread, int fd)
+    ConnectionHandle(Network& network, ReaderThread& readerThread, int fd, bool tls)
         : m_fd(fd)
+        , m_tls(tls)
         , m_network(network)
         , m_readerThread(readerThread)
     {}
 
     void send(MsgPacket&& msg);
+    bool trySendInline(MsgPacket& msg);
+    void queueWrite(MsgPacket&& msg);
     void disconnect();
     bool isReady() const;
 
@@ -57,6 +60,7 @@ public:
 
 private:
     int m_fd;
+    bool m_tls;
 
     Network& m_network;
     ReaderThread& m_readerThread;
@@ -86,7 +90,11 @@ public:
 
     void disconnect();
     void setConnection(std::shared_ptr<ConnectionHandle> connection);
-    bool isConnected();
+
+    bool isConnected()
+    {
+        return m_connected.load(std::memory_order_acquire);
+    }
 
     const SessionSettings& getSettings() const
     {
@@ -100,10 +108,11 @@ private:
     Network& m_network;
     NetworkDelegate* m_delegate;
 
-    std::recursive_mutex m_mutex;
+    std::mutex m_mutex;
     std::shared_ptr<ConnectionHandle> m_connection;
 
     std::atomic<bool> m_valid;
+    std::atomic<bool> m_connected{false};
     std::atomic<bool> m_stopped;
 
     CREATE_LOGGER("Network");
@@ -122,7 +131,9 @@ public:
         : m_network(network)
     {}
 
-    std::vector<std::string> read(int fd);
+    // Returns a reference to parsed messages. The returned reference is valid
+    // until the next call to read(). Avoids per-call vector allocation.
+    std::vector<std::string>& read(int fd);
 
     void clear(int fd)
     {
@@ -136,6 +147,7 @@ public:
 
 private:
     HashMapT<int, std::string> m_bufferMap;
+    std::vector<std::string> m_readResult;
     Network& m_network;
 
     CREATE_LOGGER("ReadBuffer");
@@ -188,11 +200,7 @@ public:
 
     void registerFD(int fd);
 
-    // Queue a write from an external thread; wakes reader via eventfd
     void queueWrite(int fd, MsgPacket&& msg);
-
-    // Try non-blocking inline send from caller's thread.
-    // Returns true if the full message was sent.
     bool trySend(int fd, MsgPacket& msg);
 
     void disconnect(int fd);

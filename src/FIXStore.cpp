@@ -46,12 +46,7 @@ void StoreHandle::store(int seqnum, const std::string& msg)
     std::memcpy(hdr + 1, &seqnum, sizeof(seqnum));
     const size_t len = msg.length();
     std::memcpy(hdr + 1 + sizeof(seqnum), &len, sizeof(len));
-
-    std::string buf;
-    buf.reserve(sizeof(hdr) + msg.size());
-    buf.append(hdr, sizeof(hdr));
-    buf.append(msg);
-    m_writer.write(std::move(buf));
+    m_writer.writeRaw(hdr, sizeof(hdr), msg);
 }
 
 void StoreHandle::setSenderSeqNum(int num)

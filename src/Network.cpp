@@ -30,7 +30,7 @@
 
 const std::string BEGIN_STRING_TAG = std::to_string(FIELD::BeginString) + TAG_ASSIGNMENT_CHAR;
 
-// pre-built search patterns: SOH + tag + '=' (avoids per-call string allocation in getTagValue)
+// pre-built search patterns: SOH + tag + '='
 const std::string BODY_LENGTH_PATTERN = Utils::buildTagPattern(FIELD::BodyLength);
 const std::string SENDER_COMP_ID_PATTERN = Utils::buildTagPattern(FIELD::SenderCompID);
 const std::string TARGET_COMP_ID_PATTERN = Utils::buildTagPattern(FIELD::TargetCompID);
@@ -826,18 +826,18 @@ void ReaderThread::process()
 void ReaderThread::processRead(int fd)
 {
     // Fast path: look up the handler under the lock, then release before processing.
-    std::shared_ptr<NetworkHandler> handler;
+    // Raw pointer is safe here: the Session holds a shared_ptr to the NetworkHandler,
+    // so it stays alive for the duration of message processing on the reader thread.
+    //
+    // TLS progress is handled by the caller (process() loop) before calling processRead,
+    // so we don't recheck it here.
+    NetworkHandler* handler = nullptr;
     {
         std::lock_guard lock(m_mutex);
 
-        if (!m_network.progressConnection(fd)) {
-            disconnect(fd);
-            return;
-        }
-
         auto it = m_connections.find(fd);
         if (it != m_connections.end()) {
-            handler = it->second;  // copy shared_ptr; ref-count keeps handler alive
+            handler = it->second.get();
         }
     }
 
@@ -845,7 +845,7 @@ void ReaderThread::processRead(int fd)
     if (handler) {
         LOG_TRACE("Handling data for known connection on fd=" << fd);
 
-        auto msgs = m_buffer.read(fd);
+        auto& msgs = m_buffer.read(fd);
         for (auto& msg : msgs)
             handler->processMessage(std::move(msg));
 
@@ -872,7 +872,7 @@ void ReaderThread::processRead(int fd)
             LOG_TRACE("Handling data for unknown connection on fd=" << fd);
             const auto acceptor = it->second;
 
-            auto msgs = m_buffer.read(fd);
+            auto& msgs = m_buffer.read(fd);
             if (!msgs.empty()) {
                 // this connection is either invalid or will be known
                 m_unknownConnections.erase(fd);
@@ -974,7 +974,7 @@ void ReaderThread::stop()
 bool ReaderThread::addConnection(const std::shared_ptr<NetworkHandler>& handler, int fd)
 {
     std::lock_guard lock(m_mutex);
-    handler->setConnection(std::make_shared<ConnectionHandle>(m_network, *this, fd));
+    handler->setConnection(std::make_shared<ConnectionHandle>(m_network, *this, fd, m_network.hasTLS(fd)));
     m_connections[fd] = handler;
 
     return true;
@@ -1042,9 +1042,9 @@ void ReaderThread::disconnect(int fd)
 //               ReadBuffer               //
 ////////////////////////////////////////////
 
-std::vector<std::string> ReadBuffer::read(int fd)
+std::vector<std::string>& ReadBuffer::read(int fd)
 {
-    std::vector<std::string> ret;
+    m_readResult.clear();
 
     auto it = m_bufferMap.find(fd);
     if (it == m_bufferMap.end())
@@ -1061,14 +1061,16 @@ std::vector<std::string> ReadBuffer::read(int fd)
         size_t consumed = 0;
         while (true) {
             // find beginning of message
-            size_t ptr = buffer.find(BEGIN_STRING_TAG, consumed);
-            if (ptr == std::string::npos)
+            const size_t ptr_start = buffer.find(BEGIN_STRING_TAG, consumed);
+            if (ptr_start == std::string::npos)
                 break;
 
-            if (ptr > consumed) {
-                LOG_WARN("Discarding text received in buffer: " << buffer.substr(consumed, ptr - consumed));
-                consumed = ptr;
+            if (ptr_start > consumed) {
+                LOG_WARN("Discarding text received in buffer: " << buffer.substr(consumed, ptr_start - consumed));
+                consumed = ptr_start;
             }
+
+            size_t ptr = ptr_start;
 
             // find start of bodylength tag (zero-copy)
             auto tag_it = Utils::getTagValueView(buffer, BODY_LENGTH_PATTERN, BODY_LENGTH_PATTERN.size(), ptr);
@@ -1094,8 +1096,16 @@ std::vector<std::string> ReadBuffer::read(int fd)
             ptr = tag_it.second;
 
             // completed message!
-            ret.push_back(buffer.substr(consumed, ptr + 1 - consumed));
-            consumed = ptr + 1;
+            const size_t msgEnd = ptr + 1;
+            if (consumed == 0 && msgEnd == buffer.size()) {
+                // Fast path: single message consumed the entire buffer — move instead of copy.
+                m_readResult.push_back(std::move(buffer));
+                buffer.clear();
+                consumed = 0; // buffer is now empty, skip erase below
+                break;
+            }
+            m_readResult.push_back(buffer.substr(consumed, msgEnd - consumed));
+            consumed = msgEnd;
         }
 
         // compact buffer once after extracting all messages
@@ -1107,17 +1117,17 @@ std::vector<std::string> ReadBuffer::read(int fd)
         if (bytes == -1) {
             // nothing more to read for now, this is fine
             if (errno == EAGAIN || errno == EWOULDBLOCK)
-                return ret;
+                return m_readResult;
             LOG_ERROR("Error reading from socket: " << std::string(strerror(errno)));
         } else {
             throw SocketClosedError("Socket is closed");
         }
 
         buffer.clear();
-        return ret;
+        return m_readResult;
     }
 
-    return ret;
+    return m_readResult;
 }
 
 ////////////////////////////////////////////
@@ -1158,7 +1168,7 @@ void ReaderThread::queueWrite(int fd, MsgPacket&& msg)
         m_writeBuffers[fd].m_queue.push_back({std::move(msg.m_msg), std::move(msg.m_callback)});
     }
 
-    // Wake reader to flush
+    // wake reader to flush
     uint64_t val = 1;
     (void)::write(m_eventFD, &val, sizeof(val));
 }
@@ -1264,19 +1274,31 @@ void ConnectionHandle::disconnect()
     m_readerThread.disconnect(m_fd);
 }
 
-void ConnectionHandle::send(MsgPacket&& msg)
+bool ConnectionHandle::trySendInline(MsgPacket& msg)
 {
     // For non-TLS: try non-blocking inline send from the caller's thread.
     // For TLS: always queue to reader (SSL objects aren't safe for concurrent read+write).
-    if (!m_network.hasTLS(m_fd)) {
-        if (m_readerThread.trySend(m_fd, msg)) {
-            if (msg.m_callback)
-                msg.m_callback();
-            return;
-        }
+    if (!m_tls) {
+        if (m_readerThread.trySend(m_fd, msg))
+            return true;
+    }
+    return false;
+}
+
+void ConnectionHandle::send(MsgPacket&& msg)
+{
+    if (trySendInline(msg)) {
+        if (msg.m_callback)
+            msg.m_callback();
+        return;
     }
 
-    // Fall back to reader's write queue
+    // fall back to reader's write queue
+    m_readerThread.queueWrite(m_fd, std::move(msg));
+}
+
+void ConnectionHandle::queueWrite(MsgPacket&& msg)
+{
     m_readerThread.queueWrite(m_fd, std::move(msg));
 }
 
@@ -1343,19 +1365,38 @@ void NetworkHandler::update()
 
 void NetworkHandler::send(MsgPacket&& msg)
 {
-    std::lock_guard lock(m_mutex);
-    if (m_connection) {
-        if (!m_valid.load(std::memory_order_acquire)) {
-            m_connection = nullptr;
-            return;
+    // Extract callback before acquiring the lock: if trySendInline succeeds,
+    // we fire the callback AFTER releasing m_mutex.  This avoids recursive
+    // locking (sendLogout's callback calls terminate() → disconnect() →
+    // lock(m_mutex)) and lets us use a cheaper std::mutex.
+    SendCallback_T callback;
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_connection) {
+            if (!m_valid.load(std::memory_order_acquire)) {
+                m_connection = nullptr;
+                return;
+            }
+            callback = std::move(msg.m_callback);
+            msg.m_callback = {};
+            if (m_connection->trySendInline(msg)) {
+                // Inline send succeeded — callback fires below, outside lock
+            } else {
+                // Queued for async delivery — restore callback for writer thread
+                msg.m_callback = std::move(callback);
+                callback = {};
+                m_connection->queueWrite(std::move(msg));
+            }
         }
-        m_connection->send(std::move(msg));
     }
+    if (callback)
+        callback();
 }
 
 void NetworkHandler::disconnect()
 {
     std::lock_guard lock(m_mutex);
+    m_connected.store(false, std::memory_order_release);
     if (m_connection) {
         if (!m_valid.load(std::memory_order_acquire)) {
             m_connection = nullptr;
@@ -1371,19 +1412,11 @@ void NetworkHandler::setConnection(std::shared_ptr<ConnectionHandle> connection)
     std::lock_guard lock(m_mutex);
     m_connection = connection;
     m_valid.store(true, std::memory_order_release);
+    m_connected.store(connection != nullptr, std::memory_order_release);
 }
 
 void NetworkHandler::invalidate()
 {
     m_valid.store(false, std::memory_order_release);
-}
-
-bool NetworkHandler::isConnected()
-{
-    std::lock_guard lock(m_mutex);
-    if (!m_valid.load(std::memory_order_acquire)) {
-        m_connection = nullptr;
-        return false;
-    }
-    return m_connection != nullptr && m_connection->isReady();
+    m_connected.store(false, std::memory_order_release);
 }

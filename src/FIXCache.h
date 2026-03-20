@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -67,11 +68,10 @@ private:
     std::atomic<int> m_senderSeqNum;
     std::atomic<int> m_targetSeqNum;
 
-    // Dirty flag: seqnums are flushed to store periodically, not per-message
-    bool m_seqNumsDirty = false;
+    HashMapT<int, std::string> m_messages;
 
-    // Wire-only cache: stores serialized FIX strings, re-parsed on demand for resend requests
-    std::map<int, std::string> m_messages;
+    bool m_seqNumsDirty = false;
+    std::vector<int> m_pendingStoreSeqNums;
 
     std::map<int, Message> m_inboundQueue;
 

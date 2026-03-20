@@ -76,13 +76,8 @@ TEST_F(SessionResendTest, BidirectionalMessageRecovery)
     ASSERT_NE(initiator, nullptr);
     ASSERT_NE(acceptor, nullptr);
 
-    ASSERT_TRUE(waitFor([&] { return initiator->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
-    ASSERT_TRUE(waitFor([&] { return acceptor->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
-    ASSERT_TRUE(waitFor([&] { return initiator->getSenderSeqNum() >= 2; }, std::chrono::seconds(3)));
-    ASSERT_TRUE(waitFor([&] { return acceptor->getSenderSeqNum() >= 2; }, std::chrono::seconds(3)));
-
-    EXPECT_GE(initiator->getTargetSeqNum(), 2);
-    EXPECT_GE(acceptor->getTargetSeqNum(), 2);
+    ASSERT_TRUE(waitForSessionReady(initiator));
+    ASSERT_TRUE(waitForSessionReady(acceptor));
 
     app.stop();
 }

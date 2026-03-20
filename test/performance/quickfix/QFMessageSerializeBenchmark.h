@@ -1,13 +1,12 @@
 #pragma once
 
-#include <FieldNumbers.h>
 #include <Fields.h>
-#include <fix42/Heartbeat.h>
-#include <fix42/NewOrderSingle.h>
+#include <Message.h>
 
 #include <string>
 #include <vector>
 
+#include "BenchmarkFixtures.h"
 #include "BenchmarkFramework.h"
 #include "QFUtils.h"
 
@@ -16,7 +15,8 @@ namespace perf {
 inline std::vector<BenchmarkResult> runQFSerializeBenchmarks()
 {
     const std::string ts = qfTimestamp();
-    FIX::UtcTimeStamp utcTs = FIX::UtcTimeStamp::now();
+    const auto headerFields = bench::sessionHeaderFields("12345", ts);
+    const auto nosBodyFields = bench::newOrderSingleBodyFields(ts);
 
     static volatile size_t sink = 0;
 
@@ -27,11 +27,12 @@ inline std::vector<BenchmarkResult> runQFSerializeBenchmarks()
         /*warmup=*/50'000,
         /*measure=*/500'000,
         [&]() {
-            FIX42::Heartbeat msg;
-            msg.getHeader().setField(FIX::SenderCompID("INITIATOR"));
-            msg.getHeader().setField(FIX::TargetCompID("ACCEPTOR"));
-            msg.getHeader().setField(FIX::MsgSeqNum(12345));
-            msg.getHeader().setField(FIX::SendingTime(utcTs));
+            FIX::Message msg;
+            msg.getHeader().setField(FIX::BeginString(std::string(bench::kBenchmarkBeginString)));
+            msg.getHeader().setField(FIX::MsgType("0"));
+            bench::applyFields(headerFields, [&](int tag, const std::string& value) {
+                msg.getHeader().setField(FIX::StringField(tag, value));
+            });
             auto s = msg.toString();
             sink += s.size();
         }
@@ -42,21 +43,15 @@ inline std::vector<BenchmarkResult> runQFSerializeBenchmarks()
         /*warmup=*/50'000,
         /*measure=*/500'000,
         [&]() {
-            FIX42::NewOrderSingle msg(
-                FIX::ClOrdID("ORDER123456"),
-                FIX::HandlInst(FIX::HandlInst_AUTOMATED_EXECUTION_NO_INTERVENTION),
-                FIX::Symbol("AAPL"),
-                FIX::Side(FIX::Side_BUY),
-                FIX::TransactTime(utcTs),
-                FIX::OrdType(FIX::OrdType_LIMIT)
-            );
-            msg.getHeader().setField(FIX::SenderCompID("INITIATOR"));
-            msg.getHeader().setField(FIX::TargetCompID("ACCEPTOR"));
-            msg.getHeader().setField(FIX::MsgSeqNum(12345));
-            msg.getHeader().setField(FIX::SendingTime(utcTs));
-            msg.set(FIX::OrderQty(100));
-            msg.set(FIX::Price(150.00));
-            msg.set(FIX::TimeInForce(FIX::TimeInForce_DAY));
+            FIX::Message msg;
+            msg.getHeader().setField(FIX::BeginString(std::string(bench::kBenchmarkBeginString)));
+            msg.getHeader().setField(FIX::MsgType("D"));
+            bench::applyFields(headerFields, [&](int tag, const std::string& value) {
+                msg.getHeader().setField(FIX::StringField(tag, value));
+            });
+            bench::applyFields(nosBodyFields, [&](int tag, const std::string& value) {
+                msg.setField(FIX::StringField(tag, value));
+            });
             auto s = msg.toString();
             sink += s.size();
         }

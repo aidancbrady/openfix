@@ -37,6 +37,7 @@ public:
     }
 
     void write(const std::string& text);
+    void writeRaw(const char* prefix, size_t prefixLen, const std::string& body);
     void writeMessage(int64_t epoch_us, bool inbound, const std::string& msg);
     void writeMessage(int64_t epoch_us, bool inbound, std::string&& msg);
 

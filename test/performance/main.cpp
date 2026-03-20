@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "BenchmarkFixtures.h"
 #include "BenchmarkFramework.h"
 #include "ChecksumBenchmark.h"
 #include "MessageParseBenchmark.h"
@@ -20,6 +21,7 @@ int main(int argc, char** argv)
     // Initialize platform settings to match the test suite configuration.
     PlatformSettings::load({
         {"AdminWebsitePort", "0"},
+        {"DataPath",         perf::bench::openfixStoreDir().string()},
         {"UpdateDelay",      "10"},
         {"InputThreads",     "1"},
         {"EpollTimeout",     "10"},

@@ -3,7 +3,7 @@ load("@rules_cc//cc:defs.bzl", "cc_test", "cc_library")
 filegroup(
     name = "fix-dictionary",
     srcs = ["FIXDictionary.xml"],
-    visibility = ["//test/performance:__pkg__"],
+    visibility = ["//test/performance:__subpackages__"],
 )
 
 cc_library(

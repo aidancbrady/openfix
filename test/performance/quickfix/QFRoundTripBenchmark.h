@@ -25,9 +25,9 @@ inline std::vector<BenchmarkResult> runQFRoundTripBenchmarks()
 
     int port = qfGetAvailablePort();
     std::string configPath = qfWriteConfig(port);
-    std::string storePath  = "/tmp/qf_bench_store_" + std::to_string(port);
+    std::string storePath  = bench::quickfixStoreDir(port).string();
 
-    std::filesystem::create_directories(storePath);
+    bench::resetQuickfixStoreDir(port);
 
     QFBenchApp app;
     FIX::SessionSettings settings(configPath);
@@ -45,7 +45,7 @@ inline std::vector<BenchmarkResult> runQFRoundTripBenchmarks()
         return {};
     }
 
-    if (!client.performLogon()) {
+    if (!client.performLogon("INITIATOR", "ACCEPTOR", 1, 30, std::string(bench::kBenchmarkBeginString))) {
         std::cerr << "[QF RoundTrip] Logon failed\n";
         acceptor.stop();
         std::filesystem::remove_all(storePath);
@@ -63,7 +63,8 @@ inline std::vector<BenchmarkResult> runQFRoundTripBenchmarks()
         if (timed) timer.start();
 
         // Send TestRequest (35=1) with TestReqID.
-        client.sendMessage("1", seqNum++, {{112, testReqID}});
+        client.sendMessage("1", seqNum++, {{112, testReqID}},
+            "INITIATOR", "ACCEPTOR", std::string(bench::kBenchmarkBeginString));
 
         // Receive messages until we get the Heartbeat matching our TestReqID.
         while (true) {

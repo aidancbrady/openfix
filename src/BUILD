@@ -7,6 +7,7 @@ cc_library(
     include_prefix = "openfix",
     hdrs = glob(["*.h"]),
     srcs = glob(["*.cpp"]),
+    copts = ["-mavx2"],
     deps = [
         "//lib:openfix-lib",
         "@pugixml//:pugixml",

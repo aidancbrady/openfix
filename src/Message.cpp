@@ -6,7 +6,41 @@
 #include "Checksum.h"
 #include "Fields.h"
 
-const HashSetT<int> IGNORED_TAGS = {FIELD::BeginString, FIELD::BodyLength, FIELD::CheckSum};
+static inline bool isIgnoredTag(int tag)
+{
+    return tag == FIELD::BeginString || tag == FIELD::BodyLength || tag == FIELD::CheckSum;
+}
+
+// Pre-computed "tag=" strings for tags 0..1023 (covers nearly all FIX tags).
+// Merging the tag number and '=' into a single append reduces per-field overhead.
+struct TagEqStr { char buf[5]; uint8_t len; };
+static const auto& getTagEqTable()
+{
+    static const auto table = [] {
+        std::array<TagEqStr, 1024> t{};
+        for (int i = 0; i < 1024; ++i) {
+            const auto [ptr, ec] = std::to_chars(t[i].buf, t[i].buf + sizeof(t[i].buf) - 1, i);
+            *ptr = '=';
+            t[i].len = static_cast<uint8_t>(ptr - t[i].buf + 1);
+        }
+        return t;
+    }();
+    return table;
+}
+
+// Append "tag=" to out in a single operation.
+static void appendTagEq(std::string& out, int tag)
+{
+    if (tag >= 0 && tag < 1024) [[likely]] {
+        const auto& entry = getTagEqTable()[tag];
+        out.append(entry.buf, entry.len);
+    } else {
+        char buf[12];
+        const auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), tag);
+        out.append(buf, ptr - buf);
+        out += TAG_ASSIGNMENT_CHAR;
+    }
+}
 
 static void appendInt(std::string& out, int val)
 {
@@ -17,28 +51,31 @@ static void appendInt(std::string& out, int val)
 
 static void appendGroup(std::string& out, const FieldMap& fieldMap, bool skipIgnoredTags, char soh_char, int& soh_char_count)
 {
-    if (!fieldMap.empty()) {
-        for (const auto& [k, v] : fieldMap.getFields()) {
-            if (skipIgnoredTags && IGNORED_TAGS.find(k) != IGNORED_TAGS.end())
-                continue;
+    if (fieldMap.empty())
+        return;
 
-            appendInt(out, k);
-            out += TAG_ASSIGNMENT_CHAR;
-            out += v;
-            out += soh_char;
-            ++soh_char_count;
+    const auto& groups = fieldMap.getGroups();
+    for (const auto& [k, v] : fieldMap.getFields()) {
+        if (skipIgnoredTags && isIgnoredTag(k))
+            continue;
 
-            if (fieldMap.getGroupCount(k) > 0)
-                for (const auto& group : fieldMap.getGroups(k))
+        appendTagEq(out, k);
+        out.append(v.data(), v.size());
+        out += soh_char;
+        ++soh_char_count;
+
+        if (!groups.empty()) {
+            const auto it = groups.find(k);
+            if (it != groups.end())
+                for (const auto& group : it->second)
                     appendGroup(out, group, skipIgnoredTags, soh_char, soh_char_count);
         }
+    }
 
-        if (!skipIgnoredTags && fieldMap.has(FIELD::CheckSum)) {
-            appendInt(out, FIELD::CheckSum);
-            out += TAG_ASSIGNMENT_CHAR;
-            out += fieldMap.getField(FIELD::CheckSum);
-            out += soh_char;
-        }
+    if (!skipIgnoredTags && fieldMap.has(FIELD::CheckSum)) {
+        appendTagEq(out, FIELD::CheckSum);
+        out += fieldMap.getField(FIELD::CheckSum);
+        out += soh_char;
     }
 }
 
@@ -62,52 +99,59 @@ void Message::toStream(std::ostream& ostr, char soh_char) const
     ostr << serialize(soh_char);
 }
 
-std::string Message::serialize(char soh_char) const
+void Message::serializeTo(std::string& result, char soh_char) const
 {
-    std::string prefix;
-    prefix.reserve(32);
-    int soh_char_count = 1;  // at least 1 from tag 9
-    const auto it = m_header.getFields().find(FIELD::BeginString);
-    if (it != m_header.getFields().end()) {
-        appendInt(prefix, FIELD::BeginString);
-        prefix += TAG_ASSIGNMENT_CHAR;
-        prefix += it->second;
-        prefix += soh_char;
-        ++soh_char_count;
-    }
-
-    std::string body;
-    body.reserve(256);
+    // Phase 1: serialize body content (header + body + trailer, minus ignored tags)
+    // into a temporary buffer so we can measure BodyLength.
+    // Thread-local buffer avoids re-allocation on each call.
+    thread_local std::string body;
+    body.clear();
+    int soh_char_count = 1;  // at least 1 from the BodyLength tag itself
     appendGroup(body, m_header, true, soh_char, soh_char_count);
     appendGroup(body, m_body, true, soh_char, soh_char_count);
     appendGroup(body, m_trailer, true, soh_char, soh_char_count);
 
-    // build BodyLength tag
-    std::string bodyLenTag;
-    bodyLenTag.reserve(16);
-    appendInt(bodyLenTag, FIELD::BodyLength);
-    bodyLenTag += TAG_ASSIGNMENT_CHAR;
-    appendInt(bodyLenTag, static_cast<int>(body.size()));
-    bodyLenTag += soh_char;
+    // Phase 2: build result in a single buffer = prefix + BodyLength + body + checksum.
+    // prefix: "8=<BeginString>SOH"  (typically 12-14 bytes)
+    // bodyLen: "9=NNN...SOH"        (typically 5-8 bytes)
+    // checksum: "10=NNNSO"          (always 7 bytes)
+    result.clear();
+    const size_t needed = 20 + body.size() + 8;
+    if (result.capacity() < needed)
+        result.reserve(needed);
 
-    // assemble: prefix + bodyLength + body
-    std::string result;
-    result.reserve(prefix.size() + bodyLenTag.size() + body.size() + 16);
-    result += prefix;
-    result += bodyLenTag;
-    result += body;
+    // Write BeginString prefix
+    const auto bsIt = m_header.getFields().find(FIELD::BeginString);
+    if (bsIt != m_header.getFields().end()) {
+        result.append("8=", 2);
+        result.append(bsIt->second.data(), bsIt->second.size());
+        result += soh_char;
+        ++soh_char_count;
+    }
 
-    // get checksum (SIMD-accelerated for large messages)
+    // Write BodyLength tag
+    result.append("9=", 2);
+    appendInt(result, static_cast<int>(body.size()));
+    result += soh_char;
+
+    // Append body content
+    result.append(body);
+
+    // Compute checksum (SIMD-accelerated)
     uint8_t checksum = computeChecksum(result);
     if (soh_char != INTERNAL_SOH_CHAR)
         checksum += static_cast<uint8_t>(soh_char_count * (INTERNAL_SOH_CHAR - soh_char));
     const auto checksumStr = formatChecksum(checksum);
 
-    appendInt(result, FIELD::CheckSum);
-    result += TAG_ASSIGNMENT_CHAR;
+    result.append("10=", 3);
     result.append(checksumStr.data(), checksumStr.size());
     result += soh_char;
+}
 
+std::string Message::serialize(char soh_char) const
+{
+    std::string result;
+    serializeTo(result, soh_char);
     return result;
 }
 
@@ -116,15 +160,22 @@ std::string Message::toString(bool internal) const
     return serialize(internal ? INTERNAL_SOH_CHAR : EXTERNAL_SOH_CHAR);
 }
 
-// Materializing copy constructor: deep-copies all string_views into owned storage.
+void Message::toString(std::string& out, bool internal) const
+{
+    serializeTo(out, internal ? INTERNAL_SOH_CHAR : EXTERNAL_SOH_CHAR);
+}
+
+// deep-copy all string_views into owned storage
 FieldMap::FieldMap(const FieldMap& other)
     : m_groups(other.m_groups)
     , m_groupSpec(other.m_groupSpec)
 {
-    m_fields.reserve(other.m_fields.size());
+    const size_t n = other.m_fields.size();
+    m_fields.reserve(n);
+    m_ownedStorage.reserve(std::max(n, static_cast<size_t>(OWNED_STORAGE_CAPACITY)));
     for (const auto& [tag, sv] : other.m_fields) {
-        auto [it, _] = m_ownedStorage.emplace(tag, std::string(sv));
-        m_fields.insert({tag, std::string_view(it->second)});
+        m_ownedStorage.emplace_back(tag, std::string(sv));
+        m_fields.insert({tag, std::string_view(m_ownedStorage.back().second)});
     }
 }
 
@@ -138,20 +189,34 @@ FieldMap& FieldMap::operator=(const FieldMap& other)
     m_groups = other.m_groups;
     m_groupSpec = other.m_groupSpec;
 
-    m_fields.reserve(other.m_fields.size());
+    const size_t n = other.m_fields.size();
+    m_fields.reserve(n);
+    if (m_ownedStorage.capacity() < n)
+        m_ownedStorage.reserve(std::max(n, static_cast<size_t>(OWNED_STORAGE_CAPACITY)));
     for (const auto& [tag, sv] : other.m_fields) {
-        auto [it, _] = m_ownedStorage.emplace(tag, std::string(sv));
-        m_fields.insert({tag, std::string_view(it->second)});
+        m_ownedStorage.emplace_back(tag, std::string(sv));
+        m_fields.insert({tag, std::string_view(m_ownedStorage.back().second)});
     }
     return *this;
 }
 
 void FieldMap::setField(int tag, std::string_view value, bool order)
 {
-    auto [it, inserted] = m_ownedStorage.emplace(tag, std::string(value));
-    if (!inserted)
-        it->second = std::string(value);
-    insertFieldView(tag, std::string_view(it->second), order);
+    // Linear scan is fast for typical FIX messages (5-20 fields) and
+    // avoids per-node heap allocation of std::unordered_map.
+    for (auto& [t, s] : m_ownedStorage) {
+        if (t == tag) {
+            s.assign(value.data(), value.size());
+            insertFieldView(tag, std::string_view(s), order);
+            return;
+        }
+    }
+    // One-time reserve guarantees no reallocation (reference stability).
+    // Zero cost for parsed messages that never reach this path.
+    if (m_ownedStorage.empty())
+        m_ownedStorage.reserve(OWNED_STORAGE_CAPACITY);
+    m_ownedStorage.emplace_back(tag, std::string(value));
+    insertFieldView(tag, std::string_view(m_ownedStorage.back().second), order);
 }
 
 void FieldMap::setFieldView(int tag, std::string_view value, bool order)

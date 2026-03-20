@@ -58,6 +58,16 @@ public:
         m_msgLogger(epoch_us, dir == Direction::INBOUND, std::move(msg));
     }
 
+    void logMessage(int64_t epoch_us, const std::string& msg, Direction dir)
+    {
+        m_msgLogger(epoch_us, dir == Direction::INBOUND, msg);
+    }
+
+    void logMessage(int64_t epoch_us, std::string&& msg, Direction dir)
+    {
+        m_msgLogger(epoch_us, dir == Direction::INBOUND, std::move(msg));
+    }
+
 private:
     LoggerHandle(LoggerFunction evtLogger, MsgLoggerFunction msgLogger)
         : m_eventLogger(std::move(evtLogger))

@@ -7,6 +7,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -59,6 +60,18 @@ inline bool waitFor(const std::function<bool()>& condition, std::chrono::millise
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return condition();
+}
+
+inline bool waitForSessionReady(const std::shared_ptr<Session>& session,
+                                std::chrono::milliseconds timeout = std::chrono::seconds(3))
+{
+    return waitFor([&] {
+        return session
+            && session->getNetwork()->isConnected()
+            && session->getState() == SessionState::READY
+            && session->getSenderSeqNum() >= 2
+            && session->getTargetSeqNum() >= 2;
+    }, timeout);
 }
 
 inline SessionSettings makeAcceptorSettings(int port)
@@ -166,6 +179,18 @@ public:
             m_fd = -1;
             return false;
         }
+
+        // Disable Nagle's algorithm to prevent interaction with delayed ACK
+        // on the server side (TCP_QUICKACK is ephemeral on Linux), which can
+        // cause ~40ms stalls when sending many small messages in a tight loop.
+        const int one = 1;
+        ::setsockopt(m_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
+        // Increase send buffer so bulk benchmark sends don't block on the
+        // kernel's default 16KB wmem — prevents producer–consumer lockstep.
+        const int sndbuf = 1 << 20;  // 1 MB
+        ::setsockopt(m_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
         return true;
     }
 
@@ -181,6 +206,8 @@ public:
         }
         return false;
     }
+
+    int fd() const { return m_fd; }
 
     void sendRaw(const std::string& data)
     {
@@ -268,9 +295,10 @@ public:
     // Perform logon handshake, returns true if logon ack received.
     bool performLogon(const std::string& sender = "INITIATOR",
                       const std::string& target = "ACCEPTOR",
-                      int seqNum = 1, int heartBtInt = 30)
+                      int seqNum = 1, int heartBtInt = 30,
+                      const std::string& beginString = "FIX.4.2")
     {
-        const auto msg = buildRawMessage("FIX.4.2", {
+        const auto msg = buildRawMessage(beginString, {
             {35, "A"},
             {49, sender},
             {56, target},

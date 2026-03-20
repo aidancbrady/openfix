@@ -152,9 +152,8 @@ TEST_F(SessionLogoutTest, LogoutAckReceivedCleanDisconnect)
 
     const auto initiator = app.getSession("initiator");
     const auto acceptor = app.getSession("acceptor");
-    ASSERT_TRUE(waitFor([&] { return initiator->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
-    ASSERT_TRUE(waitFor([&] { return acceptor->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
-    ASSERT_TRUE(waitFor([&] { return initiator->getSenderSeqNum() >= 2; }, std::chrono::seconds(3)));
+    ASSERT_TRUE(waitForSessionReady(initiator));
+    ASSERT_TRUE(waitForSessionReady(acceptor));
 
     acceptor->stop();
 

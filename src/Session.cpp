@@ -7,6 +7,7 @@
 #include "Fields.h"
 #include "Messages.h"
 
+
 Session::Session(SessionSettings settings, Network& network, std::shared_ptr<IFIXLogger>& logger, std::shared_ptr<IFIXStore>& store)
     : m_settings(settings)
     , m_logger(logger->createLogger(settings))
@@ -49,13 +50,16 @@ void Session::onNetworkMessage(std::string text)
         return;
 
     try {
-        // parse message; move text to avoid a copy (parse takes by value)
         const auto msg = m_dictionary->parse(m_settings, std::move(text));
-        m_logger.logMessage(msg.getSourceText(), Direction::INBOUND);
+
+        // cache clock read for entire hot path
+        m_cachedEpochUs = Utils::getEpochMicros();
+        const long time = static_cast<long>(m_cachedEpochUs / 1000);
+
+        m_logger.logMessage(m_cachedEpochUs, msg.getSourceText(), Direction::INBOUND);
 
         LOG_DEBUG("Received: " << msg);
 
-        const auto time = Utils::getEpochMillis();
         m_lastRecvHeartbeat = time;
 
         processMessage(msg, time);
@@ -66,9 +70,16 @@ void Session::onNetworkMessage(std::string text)
             processMessage(queue.begin()->second, time);
             queue.erase(queue.begin());
         }
+
+        m_cachedEpochUs = 0;
     } catch (const MessageParsingError& e) {
+        m_cachedEpochUs = 0;
         LOG_ERROR("Error while parsing message: " << e.what());
+    } catch (const std::exception& e) {
+        m_cachedEpochUs = 0;
+        LOG_ERROR("Error while handling message: " << e.what());
     } catch (...) {
+        m_cachedEpochUs = 0;
         LOG_ERROR("Unknown error while handling message!");
     }
 }
@@ -77,7 +88,7 @@ void Session::processMessage(const Message& msg, long time)
 {
     const auto msgType = msg.getHeader().getField(FIELD::MsgType);
 
-    if (!validateMessage(msg, time)) {
+    if (!validateMessage(msg, msgType, time)) {
         LOG_ERROR("Message failed validations: " << msg);
         return;
     }
@@ -120,10 +131,13 @@ void Session::processMessage(const Message& msg, long time)
                 }
             }
         }
+
+        if (m_delegate)
+            m_delegate->onAdminMessage(*this, msg);
     } else if (msgType == MESSAGE::TEST_REQUEST) {
         const auto test_id = msg.getBody().getField(FIELD::TestReqID);
         LOG_DEBUG("Responding to test request ID=" << test_id << " with heartbeat");
-        sendHeartbeat(time, std::string(test_id));
+        sendHeartbeat(time, test_id);
     } else if (msgType == MESSAGE::REJECT) {
         LOG_INFO("Received reject message: " << msg);
     } else if (m_delegate) {
@@ -133,31 +147,35 @@ void Session::processMessage(const Message& msg, long time)
 
 void Session::send(Message& msg, SendCallback_T callback)
 {
-    const int seqnum = populateMessage(msg);
+    const int64_t epoch_us = m_cachedEpochUs ? m_cachedEpochUs : Utils::getEpochMicros();
+    const long epoch_ms = static_cast<long>(epoch_us / 1000);
+
+    const int seqnum = populateMessage(msg, epoch_ms);
     auto wire = msg.toString(true);
     m_cache->cache(seqnum, wire);
     m_cache->nextSenderSeqNum();
-    internal_send(std::move(wire), std::move(callback));
+    internal_send(std::move(wire), std::move(callback), epoch_us);
 }
 
 void Session::internal_send(const Message& msg, SendCallback_T callback)
 {
     auto wire = msg.toString(true);
-    internal_send(std::move(wire), std::move(callback));
+    const int64_t epoch_us = m_cachedEpochUs ? m_cachedEpochUs : Utils::getEpochMicros();
+    internal_send(std::move(wire), std::move(callback), epoch_us);
 }
 
-void Session::internal_send(std::string msg, SendCallback_T callback)
+void Session::internal_send(std::string msg, SendCallback_T callback, int64_t epoch_us)
 {
     if (m_network->isConnected()) {
         LOG_DEBUG("Sending outbound FIX message");
 
         // move msg into the network packet; logger gets a copy via the const-ref overload
         // (the msg is also needed by the network send, so we log first then move)
-        m_logger.logMessage(msg, Direction::OUTBOUND);
+        m_logger.logMessage(epoch_us, msg, Direction::OUTBOUND);
         m_network->send({std::move(msg), std::move(callback)});
 
         // update our heartbeat monitor as we just sent data
-        m_lastSentHeartbeat = Utils::getEpochMillis();
+        m_lastSentHeartbeat = static_cast<long>(epoch_us / 1000);
     }
 }
 
@@ -450,7 +468,7 @@ void Session::logout(const std::string& reason, bool terminate)
     sendLogout(reason, terminate);
 }
 
-void Session::sendHeartbeat(long time, std::string testReqID)
+void Session::sendHeartbeat(long time, std::string_view testReqID)
 {
     auto msg = m_dictionary->create(MESSAGE::HEARTBEAT);
     if (!testReqID.empty())
@@ -499,20 +517,29 @@ void Session::reset()
     m_cache->reset();
 }
 
-int Session::populateMessage(Message& msg)
+int Session::populateMessage(Message& msg, long epoch_ms)
 {
+    if (!epoch_ms)
+        epoch_ms = Utils::getEpochMillis();
+
     const int seqnum = m_cache->getSenderSeqNum();
 
-    msg.getHeader().setField(FIELD::BeginString, m_settings.getString(SessionSettings::BEGIN_STRING));
-    msg.getHeader().setField(FIELD::SenderCompID, m_settings.getString(SessionSettings::SENDER_COMP_ID));
-    msg.getHeader().setField(FIELD::TargetCompID, m_settings.getString(SessionSettings::TARGET_COMP_ID));
-    msg.getHeader().setField(FIELD::SendingTime, Utils::getUTCTimestamp());
-    msg.getHeader().setField(FIELD::MsgSeqNum, seqnum);
+    // setFieldView() is okay for session-constant strings since they live for program runtime
+    auto& header = msg.getHeader();
+    header.setFieldView(FIELD::BeginString, m_settings.getString(SessionSettings::BEGIN_STRING), false);
+    header.setFieldView(FIELD::SenderCompID, m_settings.getString(SessionSettings::SENDER_COMP_ID), false);
+    header.setFieldView(FIELD::TargetCompID, m_settings.getString(SessionSettings::TARGET_COMP_ID), false);
+
+    char ts_buf[24];
+    const int ts_len = Utils::writeUTCTimestamp(ts_buf, epoch_ms);
+    header.setField(FIELD::SendingTime, std::string_view(ts_buf, ts_len), false);
+
+    header.setField(FIELD::MsgSeqNum, seqnum, false);
 
     return seqnum;
 }
 
-bool Session::validateMessage(const Message& msg, long time)
+bool Session::validateMessage(const Message& msg, std::string_view msgType, long time)
 {
     auto fail = [&](const std::string& reason) {
         if (m_state == SessionState::LOGON)
@@ -555,7 +582,7 @@ bool Session::validateMessage(const Message& msg, long time)
         return false;
     }
 
-    const auto msgType = msg.getHeader().getField(FIELD::MsgType);
+    // msgType passed from caller to avoid redundant LinkedHashMap scan
     if (m_state == SessionState::LOGON && msgType != MESSAGE::LOGON) {
         logout(std::string("Received unexpected MsgType(35) during logon state: ").append(msgType), true);
         return false;

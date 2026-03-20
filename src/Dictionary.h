@@ -2,6 +2,7 @@
 
 #include <openfix/Log.h>
 
+#include <array>
 #include <memory>
 #include <string>
 
@@ -12,19 +13,24 @@
 class Dictionary
 {
 public:
+    // max FIX tag supported for flat-array field type lookup
+    static constexpr int MAX_FIELD_TAG = 1024;
+
     Message parse(const SessionSettings& settings, std::string text) const;
 
     Message create(const std::string& msg_type) const
     {
         Message msg;
 
-        auto msg_spec = getMessageSpec(msg_type);
-        if (msg_spec == nullptr)
+        const auto* bodySpec = getMessageSpecRaw(msg_type);
+        if (bodySpec == nullptr)
             throw MessageParsingError("Unknown message: " + msg_type);
-        msg.getBody().setSpec(msg_spec);
+        msg.getBody().setSpec(bodySpec);
+        msg.getHeader().setSpec(m_headerSpec.get());
+        msg.getTrailer().setSpec(m_trailerSpec.get());
 
-        msg.getHeader().setSpec(getHeaderSpec());
-        msg.getTrailer().setSpec(getTrailerSpec());
+        // assume around 8 fields in header for typical message
+        msg.getHeader().reserve(8);
 
         msg.getHeader().setField(FIELD::MsgType, msg_type);
 
@@ -33,18 +39,39 @@ public:
 
     FieldType getFieldType(int tag) const
     {
-        auto it = m_fields.find(tag);
-        if (it == m_fields.end())
+        if (tag >= 0 && tag < MAX_FIELD_TAG) [[likely]]
+            return m_fieldTypes[tag];
+        const auto it = m_fieldsFallback.find(tag);
+        if (it == m_fieldsFallback.end())
             return FieldType::UNKNOWN;
         return it->second;
     }
 
     std::shared_ptr<GroupSpec> getMessageSpec(const std::string& msg_type) const
     {
-        auto it = m_bodySpecs.find(msg_type);
+        if (msg_type.size() == 1) [[likely]] {
+            const auto c = static_cast<unsigned char>(msg_type[0]);
+            if (c < FAST_MSGTYPE_SIZE && m_bodySpecsFast[c])
+                return m_bodySpecsFast[c];
+        }
+        const auto it = m_bodySpecs.find(msg_type);
         if (it == m_bodySpecs.end())
             return nullptr;
         return it->second;
+    }
+
+    const GroupSpec* getMessageSpecRaw(std::string_view msg_type) const
+    {
+        // fast path for single-char message types
+        if (msg_type.size() == 1) [[likely]] {
+            const auto c = static_cast<unsigned char>(msg_type[0]);
+            if (c < FAST_MSGTYPE_SIZE)
+                return m_bodySpecsFast[c].get();
+        }
+        const auto it = m_bodySpecs.find(std::string(msg_type));
+        if (it == m_bodySpecs.end())
+            return nullptr;
+        return it->second.get();
     }
 
     const std::shared_ptr<GroupSpec>& getHeaderSpec() const
@@ -62,7 +89,13 @@ private:
     std::shared_ptr<GroupSpec> m_trailerSpec;
 
     HashMapT<std::string, std::shared_ptr<GroupSpec>> m_bodySpecs;
-    HashMapT<int, FieldType> m_fields;
+
+    static constexpr int FAST_MSGTYPE_SIZE = 128;
+    std::array<std::shared_ptr<GroupSpec>, FAST_MSGTYPE_SIZE> m_bodySpecsFast{};
+
+    std::array<FieldType, MAX_FIELD_TAG> m_fieldTypes{};
+    // fallback lookup for tags >= MAX_FIELD_TAG
+    HashMapT<int, FieldType> m_fieldsFallback;
 
     friend class DictionaryRegistry;
 

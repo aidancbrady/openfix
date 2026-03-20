@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "BenchmarkFixtures.h"
 #include "BenchmarkFramework.h"
 #include "NetworkThroughputBenchmark.h"  // for makeAcceptorBenchSettings
 #include "SessionTestHarness.h"
@@ -86,7 +87,7 @@ inline std::vector<BenchmarkResult> runMultilegRoundTripBenchmarks()
     constexpr int WARMUP  =  50;
     constexpr int MEASURE = 500;
 
-    std::filesystem::remove_all("./data");
+    bench::resetOpenfixStoreDir();
 
     const int port = fix_test::getAvailablePort();
 
@@ -102,21 +103,21 @@ inline std::vector<BenchmarkResult> runMultilegRoundTripBenchmarks()
     if (!client.connectWithRetry(port, std::chrono::seconds(5))) {
         std::cerr << "[MultilegRT] Failed to connect\n";
         app.stop();
-        std::filesystem::remove_all("./data");
+        bench::resetOpenfixStoreDir();
         return {};
     }
 
-    if (!client.performLogon()) {
+    if (!client.performLogon("INITIATOR", "ACCEPTOR", 1, 30, std::string(bench::kBenchmarkBeginString))) {
         std::cerr << "[MultilegRT] Logon failed\n";
         app.stop();
-        std::filesystem::remove_all("./data");
+        bench::resetOpenfixStoreDir();
         return {};
     }
 
     if (!fix_test::waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(5))) {
         std::cerr << "[MultilegRT] Server did not receive logon\n";
         app.stop();
-        std::filesystem::remove_all("./data");
+        bench::resetOpenfixStoreDir();
         return {};
     }
 
@@ -129,25 +130,8 @@ inline std::vector<BenchmarkResult> runMultilegRoundTripBenchmarks()
 
         if (timed) timer.start();
 
-        client.sendMessage("AB", seqNum++, {
-            {TAG_ClOrdID,       clOrdID},
-            {TAG_Side,          "1"},
-            {TAG_Symbol,        "SPREAD"},
-            {TAG_TransactTime,  Utils::getUTCTimestamp()},
-            {TAG_OrdType,       "2"},
-            {TAG_OrderQty,      "1000"},
-            // Repeating group: 3 legs
-            {TAG_NoLegs,        "3"},
-            {TAG_LegSymbol,     "AAPL"},
-            {TAG_LegSide,       "1"},
-            {TAG_LegQty,        "100"},
-            {TAG_LegSymbol,     "GOOG"},
-            {TAG_LegSide,       "2"},
-            {TAG_LegQty,        "200"},
-            {TAG_LegSymbol,     "MSFT"},
-            {TAG_LegSide,       "1"},
-            {TAG_LegQty,        "300"},
-        });
+        client.sendMessage("AB", seqNum++, bench::newOrderMultilegBodyFields(clOrdID, Utils::getUTCTimestamp()),
+            "INITIATOR", "ACCEPTOR", std::string(bench::kBenchmarkBeginString));
 
         // Wait for the ExecutionReport (35=8) response
         while (true) {
@@ -182,7 +166,7 @@ inline std::vector<BenchmarkResult> runMultilegRoundTripBenchmarks()
 
     client.close();
     app.stop();
-    std::filesystem::remove_all("./data");
+    bench::resetOpenfixStoreDir();
 
     return { timer.finalize("RoundTrip/Multileg-AB-8") };
 }

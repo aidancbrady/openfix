@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "BenchmarkFixtures.h"
 #include "BenchmarkFramework.h"
 #include "QFUtils.h"
 
@@ -18,49 +19,36 @@ inline std::vector<BenchmarkResult> runQFParseBenchmarks()
     const std::string ts = qfTimestamp();
 
     // Build raw FIX messages identical to the openfix benchmark inputs.
-    const std::string heartbeatRaw = qfBuildRawMessage("FIX.4.2", {
-        {35, "0"},
-        {49, "INITIATOR"},
-        {56, "ACCEPTOR"},
-        {34, "1"},
-        {52, ts},
-    });
+    const std::string heartbeatRaw = qfBuildRawMessage(
+        std::string(bench::kBenchmarkBeginString),
+        bench::heartbeatWireFields(1, ts)
+    );
 
-    const std::string nosRaw = qfBuildRawMessage("FIX.4.2", {
-        {35, "D"},
-        {49, "INITIATOR"},
-        {56, "ACCEPTOR"},
-        {34, "1"},
-        {52, ts},
-        {11, "ORDER123456"},
-        {21, "1"},
-        {55, "AAPL"},
-        {54, "1"},
-        {60, ts},
-        {40, "2"},
-        {38, "100"},
-        {44, "150.00"},
-        {59, "0"},
-    });
+    const std::string nosRaw = qfBuildRawMessage(
+        std::string(bench::kBenchmarkBeginString),
+        bench::newOrderSingleWireFields(1, ts)
+    );
 
     std::vector<BenchmarkResult> results;
 
-    results.push_back(run(
+    results.push_back(runPrepared(
         "Parse/Heartbeat",
         /*warmup=*/50'000,
         /*measure=*/500'000,
-        [&]() {
-            FIX::Message msg(heartbeatRaw, dict, true);
+        [&]() { return heartbeatRaw; },
+        [&](const std::string& text) {
+            FIX::Message msg(text, dict, true);
             (void)msg;
         }
     ));
 
-    results.push_back(run(
+    results.push_back(runPrepared(
         "Parse/NewOrderSingle",
         /*warmup=*/50'000,
         /*measure=*/500'000,
-        [&]() {
-            FIX::Message msg(nosRaw, dict, true);
+        [&]() { return nosRaw; },
+        [&](const std::string& text) {
+            FIX::Message msg(text, dict, true);
             (void)msg;
         }
     ));

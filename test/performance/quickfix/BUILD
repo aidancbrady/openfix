@@ -4,8 +4,7 @@ cc_binary(
     name = "quickfix-perf",
     srcs = glob(["*.h", "*.cpp"]),
     data = [
-        "@quickfix//:spec/FIX42.xml",
-        "@quickfix//:spec/FIX44.xml",
+        "//test:fix-dictionary",
     ],
     deps = [
         "//test/performance:benchmark-framework",

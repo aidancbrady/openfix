@@ -8,7 +8,11 @@
 #include <SessionSettings.h>
 #include <SocketAcceptor.h>
 
+#include <sys/socket.h>
+
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -23,27 +27,57 @@ namespace perf {
 class QFBenchApp : public FIX::NullApplication
 {
 public:
-    std::atomic<int> msgCount{0};
+    void reset()
+    {
+        msgCount.store(0, std::memory_order_relaxed);
+        firstNs.store(0, std::memory_order_relaxed);
+        lastNs.store(0, std::memory_order_relaxed);
+    }
+
+    int count() const
+    {
+        return msgCount.load(std::memory_order_relaxed);
+    }
+
+    double elapsedSeconds() const
+    {
+        const int64_t first = firstNs.load(std::memory_order_relaxed);
+        const int64_t last = lastNs.load(std::memory_order_relaxed);
+        if (first <= 0 || last <= first)
+            return 0.0;
+        return static_cast<double>(last - first) / 1e9;
+    }
 
     void fromAdmin(const FIX::Message& msg, const FIX::SessionID&) override
     {
         FIX::MsgType msgType;
         msg.getHeader().getField(msgType);
         // Count all admin messages except logon/logout as "processed"
-        if (msgType == "0" || msgType == "1")  // Heartbeat, TestRequest
+        if (msgType == "0") {
+            const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            int64_t expected = 0;
+            (void)firstNs.compare_exchange_strong(expected, now, std::memory_order_relaxed);
+            lastNs.store(now, std::memory_order_relaxed);
             msgCount.fetch_add(1, std::memory_order_relaxed);
+        }
     }
+
+private:
+    std::atomic<int> msgCount{0};
+    std::atomic<int64_t> firstNs{0};
+    std::atomic<int64_t> lastNs{0};
 };
 
 inline std::vector<BenchmarkResult> runQFNetworkThroughputBenchmarks()
 {
-    constexpr int N = 10'000;
+    constexpr int N = bench::kNetworkThroughputMessageCount;
 
     int port = qfGetAvailablePort();
     std::string configPath = qfWriteConfig(port);
-    std::string storePath  = "/tmp/qf_bench_store_" + std::to_string(port);
+    std::string storePath  = bench::quickfixStoreDir(port).string();
 
-    std::filesystem::create_directories(storePath);
+    bench::resetQuickfixStoreDir(port);
 
     QFBenchApp app;
     FIX::SessionSettings settings(configPath);
@@ -61,7 +95,7 @@ inline std::vector<BenchmarkResult> runQFNetworkThroughputBenchmarks()
         return {};
     }
 
-    if (!client.performLogon()) {
+    if (!client.performLogon("INITIATOR", "ACCEPTOR", 1, 30, std::string(bench::kBenchmarkBeginString))) {
         std::cerr << "[QF Network/Throughput] Logon failed\n";
         acceptor.stop();
         std::filesystem::remove_all(storePath);
@@ -77,37 +111,40 @@ inline std::vector<BenchmarkResult> runQFNetworkThroughputBenchmarks()
     std::vector<std::string> msgs;
     msgs.reserve(N);
     for (int i = 0; i < N; ++i) {
-        msgs.push_back(qfBuildRawMessage("FIX.4.2", {
-            {35, "0"},
-            {49, "INITIATOR"},
-            {56, "ACCEPTOR"},
-            {34, std::to_string(2 + i)},
-            {52, ts},
-        }));
+        msgs.push_back(qfBuildRawMessage(
+            std::string(bench::kBenchmarkBeginString),
+            bench::heartbeatWireFields(2 + i, ts)
+        ));
     }
 
     // Reset counter after logon.
-    app.msgCount.store(0, std::memory_order_relaxed);
+    app.reset();
 
-    // ---- Measurement ----
-    auto start = std::chrono::steady_clock::now();
+    const std::string bulk = bench::buildBulkPayload(msgs);
 
-    for (const auto& msg : msgs)
-        client.sendRaw(msg);
+    {
+        const char* ptr = bulk.data();
+        size_t rem = bulk.size();
+        while (rem > 0) {
+            const ssize_t n = ::send(client.fd(), ptr, rem, MSG_NOSIGNAL);
+            if (n <= 0)
+                break;
+            ptr += n;
+            rem -= static_cast<size_t>(n);
+        }
+    }
 
     bool ok = qfWaitFor(
-        [&] { return app.msgCount.load(std::memory_order_relaxed) >= N; },
+        [&] { return app.count() >= N; },
         std::chrono::seconds(30)
     );
 
-    auto end = std::chrono::steady_clock::now();
-
     if (!ok) {
         std::cerr << "[QF Network/Throughput] Timed out (got "
-                  << app.msgCount.load() << " of " << N << ")\n";
+                  << app.count() << " of " << N << ")\n";
     }
 
-    double elapsed_sec = std::chrono::duration<double>(end - start).count();
+    double elapsed_sec = app.elapsedSeconds();
 
     client.close();
     acceptor.stop();

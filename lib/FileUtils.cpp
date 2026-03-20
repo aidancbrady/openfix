@@ -150,6 +150,14 @@ void WriterInstance::write(const std::string& text)
     m_dirty.store(true, std::memory_order_release);
 }
 
+void WriterInstance::writeRaw(const char* prefix, size_t prefixLen, const std::string& body)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_queue.append(prefix, prefixLen);
+    m_queue.append(body);
+    m_dirty.store(true, std::memory_order_release);
+}
+
 void WriterInstance::writeMessage(int64_t epoch_us, bool inbound, const std::string& msg)
 {
     std::lock_guard<std::mutex> lock(m_mutex);

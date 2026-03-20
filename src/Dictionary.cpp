@@ -17,32 +17,28 @@ enum class MessageState
     TRAILER
 };
 
-enum class ParserState
-{
-    START,
-    NEXT,
-    KEY,
-    VAL
-};
-
 struct ParserGroupInfo
 {
-    ParserGroupInfo(std::shared_ptr<GroupSpec> spec, std::reference_wrapper<FieldMap> group)
-        : m_spec(std::move(spec))
-        , m_group(group)
-        , m_groupTag(0)
-        , m_groupCount(0)
-        , m_groupMaxCount(0)
-    {}
+    const GroupSpec* m_spec = nullptr;
+    FieldMap* m_group = nullptr;
 
-    std::shared_ptr<GroupSpec> m_spec;
-    std::reference_wrapper<FieldMap> m_group;
+    int m_groupTag = 0;
 
-    int m_groupTag;
-
-    size_t m_groupCount;
-    size_t m_groupMaxCount;
+    size_t m_groupCount = 0;
+    size_t m_groupMaxCount = 0;
 };
+
+inline int fastParseTag(const char* begin, const char* end)
+{
+    int val = 0;
+    for (const char* p = begin; p < end; ++p) {
+        const unsigned int d = static_cast<unsigned int>(*p) - '0';
+        if (d > 9) [[unlikely]]
+            return -1;
+        val = val * 10 + static_cast<int>(d);
+    }
+    return (begin == end) ? -1 : val;
+}
 
 #define TRY_LOG_WARN(msg) \
     if (loudParsing) {    \
@@ -68,45 +64,41 @@ Message Dictionary::parse(const SessionSettings& settings, std::string text_in) 
     const bool loudParsing = settings.getBool(SessionSettings::LOUD_PARSING);
     const bool relaxedParsing = settings.getBool(SessionSettings::RELAXED_PARSING);
     const bool validateRequired = settings.getBool(SessionSettings::VALIDATE_REQUIRED_FIELDS);
+    const bool reorderTags = settings.getBool(SessionSettings::PARSING_REORDER_TAGS);
 
     Message ret;
-    // Own the source text so all string_views created during parsing remain valid
-    // for the lifetime of the Message. Move avoids a second copy.
+
+    // for incoming messages, own the original text and provide views into it for zero-copy parsing
     ret.m_sourceText = std::move(text_in);
     const std::string& text = ret.m_sourceText;
 
-    // Pre-allocate FieldMaps: typical FIX field is ~8 chars
+    // pre-allocate FieldMaps: typical FIX field is ~8 chars
     const size_t estimatedFields = text.size() / 8;
     ret.getHeader().reserve(10);
     ret.getBody().reserve(estimatedFields > 11 ? estimatedFields - 11 : 4);
     ret.getTrailer().reserve(2);
 
-    // Pre-allocate flat index to avoid repeated reallocations during parsing.
-    // Header tags go up to OrigSendingTime(122), trailer just needs CheckSum(10).
-    ret.getHeader().reserveIndex(FIELD::OrigSendingTime);
-    ret.getTrailer().reserveIndex(FIELD::CheckSum);
-
     MessageState msgState = MessageState::HEADER;
-    ParserState state = ParserState::START;
 
-    size_t key_start = 0;
-    size_t value_start = 0;
+    // stack-local storage for groupStack (avoid heap allocation here)
+    ParserGroupInfo groupStackBuf[8];
+    int groupStackSize = 0;
+    auto groupStackPop = [&]() { --groupStackSize; };
 
-    std::vector<ParserGroupInfo> groupStack;
     // start with header
-    groupStack.emplace_back(m_headerSpec, ret.getHeader());
+    groupStackBuf[groupStackSize++] = {m_headerSpec.get(), &ret.getHeader()};
 
-    auto curGroup = [&]() -> FieldMap& { return groupStack[groupStack.size() - 1].m_group.get(); };
-    auto curSpec = [&]() -> const GroupSpec& { return *groupStack[groupStack.size() - 1].m_spec; };
+    auto curGroup = [&]() -> FieldMap& { return *groupStackBuf[groupStackSize - 1].m_group; };
+    auto curSpec = [&]() -> const GroupSpec& { return *groupStackBuf[groupStackSize - 1].m_spec; };
 
     int tag = 0;
     int bodyLengthStart = 0;
     int dataLength = -1;
     int tagCount = 0;
 
-    auto validateGroup = [&](FieldMap& group, const std::shared_ptr<GroupSpec>& spec) {
+    auto validateGroup = [&](FieldMap& group, const GroupSpec* spec) {
         group.setSpec(spec);
-        if (spec->m_ordered)
+        if (reorderTags && spec->m_ordered)
             group.sortFields();
         if (!validateRequired)
             return;
@@ -117,235 +109,209 @@ Message Dictionary::parse(const SessionSettings& settings, std::string text_in) 
     };
 
     auto overwriteStack = [&](int curIdx) {
-        while (static_cast<int>(groupStack.size()) > curIdx + 1) {
-            auto& group = groupStack[groupStack.size() - 1];
+        while (groupStackSize > curIdx + 1) {
+            auto& group = groupStackBuf[groupStackSize - 1];
             if (group.m_groupTag > 0 && group.m_groupCount < group.m_groupMaxCount)
                 TRY_LOG_THROW("Repeating group terminated with count less than NumInGroup (tag=" << group.m_groupTag << ")");
-            validateGroup(group.m_group.get(), group.m_spec);
-            groupStack.pop_back();
+            validateGroup(*group.m_group, group.m_spec);
+            groupStackPop();
         }
     };
 
-    for (size_t i = 0; i < text.size(); ++i) {
-        const char c = text[i];
-
-        if (i == text.size() - 1 && c != INTERNAL_SOH_CHAR)
-            TRY_LOG_THROW("Message does not end in SOH character");
-
-        if (c == INTERNAL_SOH_CHAR) {
-            // beginning SOH char
-            if (state == ParserState::START) {
-                TRY_LOG_THROW("Message begins with SOH character (idx=" << i << ")");
-                state = ParserState::NEXT;
-                continue;
+    // --- memchr-based field extraction loop ---
+    // instead of scanning char-by-char, use memchr to jump directly.
+    // glibc's memchr uses SIMD (SSE2/AVX2) internally, making these jumps fast for large messages
+    const char* pos = text.data();
+    const char* const textEnd = text.data() + text.size();
+    // setField lambda for fallback paths (groups, header->body transition, etc.)
+    auto setField = [&](FieldMap& fieldMap, int tag, std::string_view val) {
+        if (getFieldType(tag) == FieldType::LENGTH) [[unlikely]] {
+            const int parsed = fastParseTag(val.data(), val.data() + val.size());
+            if (parsed < 0) [[unlikely]] {
+                TRY_LOG_THROW("Couldn't parse data field (tag=" << tag << ")");
+            } else {
+                dataLength = parsed;
             }
+        }
 
-            // repeated SOH chars
-            if (state == ParserState::NEXT) {
-                TRY_LOG_WARN("Message has repeating SOH characters (idx=" << i << ")");
-                continue;
-            }
+        if (tag == FIELD::BodyLength)
+            bodyLengthStart = static_cast<int>(val.data() + val.size() - text.data()) + 1;
+        fieldMap.setFieldView(tag, val, false);
+    };
 
-            auto setField = [&](FieldMap& fieldMap, int tag, std::string_view val) {
-                if (getFieldType(tag) == FieldType::LENGTH) {
-                    int parsed = 0;
-                    auto [ptr, ec] = std::from_chars(val.data(), val.data() + val.size(), parsed);
-                    if (ec != std::errc{} || ptr != val.data() + val.size()) {
-                        TRY_LOG_THROW("Couldn't parse data field (tag=" << tag << ")");
-                    } else {
-                        dataLength = parsed;
-                    }
-                }
-
-                if (tag == FIELD::BodyLength)
-                    bodyLengthStart = i + 1;
-                // don't order, we batch order fields after parsing is done
-                // zero-copy: val is a view into the original message text
-                fieldMap.setFieldView(tag, val, false);
-
-                state = ParserState::NEXT;
-            };
-
-            const std::string_view val(text.data() + value_start, i - value_start);
-
-            auto handleRepeatingTag = [&](ParserGroupInfo& group, int groupIdx) {
-                // we've already seen this tag; are we in a group?
-                if (group.m_groupTag > 0) {
-                    if (group.m_groupCount == group.m_groupMaxCount) {
-                        TRY_LOG_THROW("Repeating group count exceeds NumInGroup (tag=" << tag << ")");
-                        return -1;
-                    }
-
-                    validateGroup(group.m_group.get(), group.m_spec);
-
-                    // create a duplicate group with this tag
-                    auto& newGroup = groupStack[groupIdx - 1].m_group.get().addGroup(group.m_groupTag);
-                    setField(newGroup, tag, val);
-                    // replace current group on stack with new group
-                    group.m_group = std::ref(newGroup);
-                    ++group.m_groupCount;
-                    return groupIdx;
-                } else {
-                    TRY_LOG_THROW("Message contains duplicate tags (tag=" << tag << ")");
-                    return -1;
-                }
-            };
-
-            auto trySetField = [&](ParserGroupInfo& group, int groupIdx) {
-                // spec contains field
-                const auto fieldIt = group.m_spec->m_fields.find(tag);
-                if (fieldIt != group.m_spec->m_fields.end()) {
-                    if (group.m_group.get().has(tag))
-                        return handleRepeatingTag(group, groupIdx);
-
-                    setField(group.m_group.get(), tag, val);
-                    return groupIdx;
-                }
-
-                // spec contains group
-                const auto groupIt = group.m_spec->m_groups.find(tag);
-                if (groupIt != group.m_spec->m_groups.end()) {
-                    if (group.m_group.get().getGroupCount(tag) > 0)
-                        return handleRepeatingTag(group, groupIdx);
-
-                    // create a new group
-                    auto& fieldMap = group.m_group.get().addGroup(tag);
-                    ParserGroupInfo newGroup(groupIt->second, fieldMap);
-                    newGroup.m_groupTag = tag;
-                    newGroup.m_groupCount = 1;
-
-                    int parsed = 0;
-                    auto [ptr, ec] = std::from_chars(val.data(), val.data() + val.size(), parsed);
-                    if (ec != std::errc{} || ptr != val.data() + val.size()) {
-                        TRY_LOG_THROW("Couldn't parse NumInGroup (tag=" << tag << ")");
-                        return -1;
-                    }
-                    newGroup.m_groupMaxCount = parsed;
-
-                    groupStack.push_back(std::move(newGroup));
-                    setField(group.m_group.get(), tag, val);
-                    return groupIdx + 1;
-                }
-
-                // tag not in spec fields nor groups
+    auto handleRepeatingTag = [&](ParserGroupInfo& group, int groupIdx, int tag, std::string_view val) {
+        if (group.m_groupTag > 0) {
+            if (group.m_groupCount == group.m_groupMaxCount) {
+                TRY_LOG_THROW("Repeating group count exceeds NumInGroup (tag=" << group.m_groupTag << ")");
                 return -1;
-            };
-
-            // if we have a spec for this group
-            if (!curSpec().empty()) {
-                // try and set the field starting in the current group, and traverse up the stack on failure
-                bool didSet = false;
-                for (int i = groupStack.size() - 1; i >= 0; --i) {
-                    int newIdx = trySetField(groupStack[i], i);
-                    if (newIdx >= 0) {
-                        overwriteStack(newIdx);
-                        didSet = true;
-                        break;
-                    }
-                }
-
-                if (didSet)
-                    continue;
             }
 
-            // not in current structural group. if we're in the header, move to the body
-            if (msgState == MessageState::HEADER) {
-                // clear group stack
-                overwriteStack(-1);
+            validateGroup(*group.m_group, group.m_spec);
 
-                auto it = m_bodySpecs.end();
-                std::string msgType;
-                try {
-                    msgType = ret.getHeader().getField(FIELD::MsgType);
-                    it = m_bodySpecs.find(msgType);
-                } catch (...) {
-                    TRY_LOG_THROW("Unknown message: " << msgType);
+            auto& newGroup = groupStackBuf[groupIdx - 1].m_group->addGroup(group.m_groupTag);
+            // setFieldViewOrDetectDup() required here to update bitset
+            newGroup.setFieldViewOrDetectDup(tag, val);
+            if (getFieldType(tag) == FieldType::LENGTH) [[unlikely]] {
+                const int parsed = fastParseTag(val.data(), val.data() + val.size());
+                if (parsed >= 0)
+                    dataLength = parsed;
+            }
+            group.m_group = &newGroup;
+            ++group.m_groupCount;
+            return groupIdx;
+        } else {
+            TRY_LOG_THROW("Message contains duplicate tags (tag=" << tag << ")");
+            return -1;
+        }
+    };
+
+    auto trySetField = [&](ParserGroupInfo& group, int groupIdx, int tag, std::string_view val) {
+        if (group.m_spec->hasField(tag)) {
+            // returns true if the field was a duplicate (already seen in this group)
+            if (group.m_group->setFieldViewOrDetectDup(tag, val))
+                return handleRepeatingTag(group, groupIdx, tag, val);
+
+            // field was inserted; handle LENGTH type and BodyLength tracking
+            if (getFieldType(tag) == FieldType::LENGTH) [[unlikely]] {
+                const int parsed = fastParseTag(val.data(), val.data() + val.size());
+                if (parsed < 0) [[unlikely]] {
+                    TRY_LOG_THROW("Couldn't parse data field (tag=" << tag << ")");
+                } else {
+                    dataLength = parsed;
                 }
+            }
+            if (tag == FIELD::BodyLength)
+                bodyLengthStart = static_cast<int>(val.data() + val.size() - text.data()) + 1;
+            return groupIdx;
+        }
 
-                groupStack.emplace_back(it == m_bodySpecs.end() ? nullptr : it->second, ret.getBody());
-                msgState = MessageState::BODY;
-                if (trySetField(groupStack[0], 0) >= 0)
-                    continue;
+        const auto* groupSpec = group.m_spec->findGroup(tag);
+        if (groupSpec) {
+            if (group.m_group->getGroupCount(tag) > 0)
+                return handleRepeatingTag(group, groupIdx, tag, val);
+
+            const int parsed = fastParseTag(val.data(), val.data() + val.size());
+            if (parsed < 0) [[unlikely]] {
+                TRY_LOG_THROW("Couldn't parse NumInGroup (tag=" << tag << ")");
+                return -1;
             }
 
-            // if we're in the body, see if we can move to the trailer
-            if (msgState == MessageState::BODY) {
-                auto test = ParserGroupInfo(m_trailerSpec, ret.getTrailer());
-                int newIdx = trySetField(test, 0);
+            auto& fieldMap = group.m_group->addGroup(tag, static_cast<size_t>(parsed));
+            groupStackBuf[groupStackSize++] = {groupSpec->get(), &fieldMap, tag, 1, static_cast<size_t>(parsed)};
+            setField(*group.m_group, tag, val);
+            return groupIdx + 1;
+        }
 
+        return -1;
+    };
+
+    auto dispatchField = [&](int tag, std::string_view val) {
+        // fast path: try current group stack with spec
+        if (!curSpec().empty()) {
+            for (int j = groupStackSize - 1; j >= 0; --j) {
+                const int newIdx = trySetField(groupStackBuf[j], j, tag, val);
                 if (newIdx >= 0) {
-                    validateGroup(groupStack[0].m_group.get(), groupStack[0].m_spec);
-                    msgState = MessageState::TRAILER;
-                    groupStack[0] = test;
                     overwriteStack(newIdx);
-                    continue;
+                    return;
                 }
             }
+        }
 
-            // unknown field, all attempts failed; we assume it's in the current group
-            TRY_LOG_ERROR("Unknown field (tag=" << tag << ")");
-            setField(curGroup(), tag, val);
+        // header -> body transition
+        if (msgState == MessageState::HEADER) {
+            overwriteStack(-1);
 
+            const GroupSpec* bodySpec = nullptr;
+            try {
+                const auto msgType = ret.getHeader().getField(FIELD::MsgType);
+                bodySpec = getMessageSpecRaw(msgType);
+            } catch (...) {
+                TRY_LOG_THROW("Unknown message type");
+            }
+
+            groupStackBuf[groupStackSize++] = {bodySpec, &ret.getBody()};
+            msgState = MessageState::BODY;
+            if (trySetField(groupStackBuf[0], 0, tag, val) >= 0)
+                return;
+        }
+
+        // body -> trailer transition
+        if (msgState == MessageState::BODY) {
+            ParserGroupInfo test{m_trailerSpec.get(), &ret.getTrailer()};
+            const int newIdx = trySetField(test, 0, tag, val);
+
+            if (newIdx >= 0) {
+                validateGroup(*groupStackBuf[0].m_group, groupStackBuf[0].m_spec);
+                msgState = MessageState::TRAILER;
+                groupStackBuf[0] = test;
+                overwriteStack(newIdx);
+                return;
+            }
+        }
+
+        TRY_LOG_ERROR("Unknown field (tag=" << tag << ")");
+        setField(curGroup(), tag, val);
+    };
+
+    while (pos < textEnd) {
+        // find '=' delimiter using memchr (SIMD-accelerated in glibc)
+        const char* eq = static_cast<const char*>(memchr(pos, TAG_ASSIGNMENT_CHAR, textEnd - pos));
+        if (!eq) [[unlikely]] {
+            TRY_LOG_THROW("Missing tag assignment in remaining message");
+            break;
+        }
+
+        // parse tag number from [pos, eq)
+        tag = fastParseTag(pos, eq);
+        if (tag < 0) [[unlikely]] {
+            TRY_LOG_THROW("Tag not int");
+            // skip to next SOH
+            const char* soh = static_cast<const char*>(memchr(eq + 1, INTERNAL_SOH_CHAR, textEnd - eq - 1));
+            pos = soh ? soh + 1 : textEnd;
+            ++tagCount;
             continue;
-        } else if (c == TAG_ASSIGNMENT_CHAR) {
-            bool fail = false;
-            if (state != ParserState::KEY) {
-                // missing tag
-                if (state == ParserState::START || state == ParserState::NEXT) {
-                    TRY_LOG_THROW("Missing tag (idx=" << i << ")");
-                }
+        }
 
-                fail = true;
-            }
-
-            state = ParserState::VAL;
-            value_start = i + 1;
-
-            {
-                auto [ptr, ec] = std::from_chars(text.data() + key_start, text.data() + i, tag);
-                if (ec != std::errc{} || ptr != text.data() + i) {
-                    TRY_LOG_THROW("Tag not int (tag=" << tag << ")");
-                    fail = true;
-                }
-            }
-
+        if (tagCount < 3) [[unlikely]] {
             if (tagCount == 0 && tag != FIELD::BeginString)
                 TRY_LOG_THROW("First field is not BeginString");
             if (tagCount == 1 && tag != FIELD::BodyLength)
                 TRY_LOG_THROW("Second field is not BodyLength");
             if (tagCount == 2 && tag != FIELD::MsgType)
                 TRY_LOG_THROW("Third field is not MsgType");
+        }
+        ++tagCount;
 
-            ++tagCount;
+        const char* valStart = eq + 1;
 
-            if (!fail && dataLength >= 0) {
-                // data field handling
-                if (getFieldType(tag) == FieldType::DATA) {
-                    if (i + dataLength >= text.size())
-                        TRY_LOG_THROW("Data tag length would exceed message size");
-                    const std::string_view data_val(text.data() + i + 1, static_cast<size_t>(dataLength));
-                    curGroup().setFieldView(tag, data_val, false);
-                    i += dataLength;
-                }
-
+        // handle DATA fields: value length is predetermined, may contain SOH
+        if (dataLength >= 0) [[unlikely]] {
+            if (getFieldType(tag) == FieldType::DATA) {
+                if (valStart + dataLength > textEnd)
+                    TRY_LOG_THROW("Data tag length would exceed message size");
+                const std::string_view data_val(valStart, static_cast<size_t>(dataLength));
+                curGroup().setFieldView(tag, data_val, false);
+                // skip past the data value + trailing SOH
+                pos = valStart + dataLength + 1;
                 dataLength = -1;
                 continue;
             }
-
-            if (fail) {
-                // go to next SOH
-                while (i < text.size() - 1 && text[i + 1] != INTERNAL_SOH_CHAR)
-                    ++i;
-            }
-
-            continue;
+            dataLength = -1;
         }
 
-        if (state != ParserState::VAL) {
-            if (state != ParserState::KEY)
-                key_start = i;
-            state = ParserState::KEY;
+        // find SOH delimiter (end of value)
+        const char* soh = static_cast<const char*>(memchr(valStart, INTERNAL_SOH_CHAR, textEnd - valStart));
+        if (!soh) [[unlikely]] {
+            TRY_LOG_THROW("Message does not end in SOH character");
+            break;
         }
+
+        const std::string_view val(valStart, soh - valStart);
+
+        // dispatch the tag=value pair
+        dispatchField(tag, val);
+
+        pos = soh + 1;
     }
 
     // clear trailer
@@ -353,10 +319,6 @@ Message Dictionary::parse(const SessionSettings& settings, std::string text_in) 
 
     if (msgState != MessageState::TRAILER)
         TRY_LOG_THROW("Incomplete message");
-
-    // missing trailing SOH char
-    if (state != ParserState::NEXT)
-        TRY_LOG_THROW("Missing trailing SOH character");
 
     if (!relaxedParsing) {
         // verify bodylength
@@ -432,10 +394,15 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
         if (it == FieldTypes::LOOKUP.end())
             throw DictionaryParsingError("Unknown field type: " + type);
 
-        if (dict->m_fields.find(tag) != dict->m_fields.end())
-            throw DictionaryParsingError("Multiple field definitions for tag: " + std::to_string(tag));
-
-        dict->m_fields[tag] = it->second;
+        if (tag >= 0 && tag < Dictionary::MAX_FIELD_TAG) {
+            if (dict->m_fieldTypes[tag] != FieldType::UNKNOWN)
+                throw DictionaryParsingError("Multiple field definitions for tag: " + std::to_string(tag));
+            dict->m_fieldTypes[tag] = it->second;
+        } else {
+            if (dict->m_fieldsFallback.find(tag) != dict->m_fieldsFallback.end())
+                throw DictionaryParsingError("Multiple field definitions for tag: " + std::to_string(tag));
+            dict->m_fieldsFallback[tag] = it->second;
+        }
         fieldMap[name] = tag;
     }
 
@@ -570,6 +537,7 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
             }
         }
 
+        ret->buildLookup();
         return ret;
     };
 
@@ -591,7 +559,13 @@ std::shared_ptr<Dictionary> DictionaryRegistry::load(const std::string& path)
             throw DictionaryParsingError("msgtype definition missing from message");
         if (dict->m_bodySpecs.find(msgtype) != dict->m_bodySpecs.end())
             throw DictionaryParsingError("Redefinition of message type: " + msgtype);
-        dict->m_bodySpecs[msgtype] = buildGroup(node);
+        const auto spec = buildGroup(node);
+        dict->m_bodySpecs[msgtype] = spec;
+        if (msgtype.size() == 1) {
+            const auto c = static_cast<unsigned char>(msgtype[0]);
+            if (c < Dictionary::FAST_MSGTYPE_SIZE)
+                dict->m_bodySpecsFast[c] = spec;
+        }
     }
 
     m_dictionaries[path] = dict;

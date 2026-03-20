@@ -9,6 +9,7 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace perf {
@@ -91,6 +92,31 @@ inline BenchmarkResult run(
     for (uint64_t i = 0; i < measure; ++i) {
         timer.start();
         fn();
+        timer.stop();
+    }
+
+    return timer.finalize(name);
+}
+
+template <typename PrepareFn, typename Fn>
+inline BenchmarkResult runPrepared(
+    const std::string&    name,
+    uint64_t              warmup,
+    uint64_t              measure,
+    PrepareFn&&           prepare,
+    Fn&&                  fn)
+{
+    for (uint64_t i = 0; i < warmup; ++i) {
+        auto state = prepare();
+        fn(std::move(state));
+    }
+
+    BenchmarkTimer timer;
+    timer.reserve(measure);
+    for (uint64_t i = 0; i < measure; ++i) {
+        auto state = prepare();
+        timer.start();
+        fn(std::move(state));
         timer.stop();
     }
 
@@ -213,8 +239,8 @@ inline void printResults(const std::vector<BenchmarkResult>& results,
         std::cout
             << "\nNotes:\n"
             << "  - Checksum:   SSE2-accelerated path on x86_64, at various payload sizes\n"
-            << "  - Parse:      FIX.4.2 dictionary parse from raw bytes, no network I/O\n"
-            << "  - Serialize:  dict->create() + setField() + toString(), no network I/O\n"
+            << "  - Parse:      benchmark FIX dictionary parse from raw bytes, no network I/O\n"
+            << "  - Serialize:  generic message build + setField() + toString(), no network I/O\n"
             << "  - Network:    full-stack ingestion: parse + seq validation + store + dispatch\n"
             << "  - RoundTrip:  TestRequest(35=1) -> Heartbeat(35=0) response, full network path\n"
             << "  - Latency in microseconds; '-' = not applicable for this benchmark type\n";
@@ -222,8 +248,8 @@ inline void printResults(const std::vector<BenchmarkResult>& results,
         std::cout
             << "\nNotes:\n"
             << "  - Checksum:   scalar byte-by-byte loop (no SIMD), at various payload sizes\n"
-            << "  - Parse:      FIX.4.2 DataDictionary parse from raw bytes, no network I/O\n"
-            << "  - Serialize:  message construction + setField() + toString(), no network I/O\n"
+            << "  - Parse:      benchmark FIX dictionary parse from raw bytes, no network I/O\n"
+            << "  - Serialize:  generic message build + setField() + toString(), no network I/O\n"
             << "  - Network:    full-stack ingestion via SocketAcceptor\n"
             << "  - RoundTrip:  TestRequest(35=1) -> Heartbeat(35=0) response, full network path\n"
             << "  - Latency in microseconds; '-' = not applicable for this benchmark type\n";

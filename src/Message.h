@@ -3,12 +3,13 @@
 #include <openfix/LinkedHashMap.h>
 #include <openfix/Types.h>
 
+#include <array>
 #include <charconv>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <sstream>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include "Config.h"
@@ -67,6 +68,8 @@ struct FieldTypes
 
 struct GroupSpec
 {
+    static constexpr int FAST_LOOKUP_SIZE = 1024;
+
     using FieldSet = HashMapT<int, bool>;
 
     bool empty() const
@@ -74,10 +77,42 @@ struct GroupSpec
         return m_fields.empty() && m_groups.empty();
     }
 
+    bool hasField(int tag) const
+    {
+        if (tag >= 0 && tag < FAST_LOOKUP_SIZE) [[likely]]
+            return m_fieldLookup[tag];
+        return m_fields.find(tag) != m_fields.end();
+    }
+
+    const std::shared_ptr<GroupSpec>* findGroup(int tag) const
+    {
+        if (tag >= 0 && tag < FAST_LOOKUP_SIZE && !m_groupLookup[tag]) [[likely]]
+            return nullptr;
+        const auto it = m_groups.find(tag);
+        return it != m_groups.end() ? &it->second : nullptr;
+    }
+
+    // build flag lookup arrays for O(1) membership checks on hot path
+    void buildLookup()
+    {
+        m_fieldLookup.fill(false);
+        m_groupLookup.fill(false);
+        for (const auto& [tag, _] : m_fields)
+            if (tag >= 0 && tag < FAST_LOOKUP_SIZE)
+                m_fieldLookup[tag] = true;
+        for (const auto& [tag, _] : m_groups)
+            if (tag >= 0 && tag < FAST_LOOKUP_SIZE)
+                m_groupLookup[tag] = true;
+    }
+
     FieldSet m_fields;
     HashMapT<int, std::shared_ptr<GroupSpec>> m_groups;
     bool m_ordered = false;
     std::vector<int> m_fieldOrder;
+
+    // Flat bitset for O(1) field/group membership checks.
+    std::array<bool, FAST_LOOKUP_SIZE> m_fieldLookup{};
+    std::array<bool, FAST_LOOKUP_SIZE> m_groupLookup{};
 };
 
 class FieldMap
@@ -85,11 +120,11 @@ class FieldMap
 public:
     FieldMap() = default;
 
-    // Materializing copy: deep-copies all string_views into owned storage.
+    // deep-copies all string_views into owned storage
     FieldMap(const FieldMap& other);
     FieldMap& operator=(const FieldMap& other);
 
-    // Default move is safe: unordered_map move preserves element addresses.
+    // default move is safe: unordered_map move preserves element addresses
     FieldMap(FieldMap&&) = default;
     FieldMap& operator=(FieldMap&&) = default;
 
@@ -123,14 +158,7 @@ public:
         return m_fields.erase(tag);
     }
 
-    // Owning setField: copies value into internal storage.
-    // Use for outbound message construction and any case where the
-    // source string may not outlive this FieldMap.
     void setField(int tag, std::string_view value, bool order = true);
-
-    // Zero-copy setField: stores the view directly without copying.
-    // The caller must guarantee the underlying data outlives this FieldMap.
-    // Used by Dictionary::parse() where views reference the original message text.
     void setFieldView(int tag, std::string_view value, bool order = true);
 
     void setField(int tag, int value, bool order = true)
@@ -170,13 +198,16 @@ public:
         return vec[idx];
     }
 
-    FieldMap& addGroup(int tag)
+    FieldMap& addGroup(int tag, size_t reserveHint = 0)
     {
         auto it = m_groups.find(tag);
-        if (it == m_groups.end())
+        if (it == m_groups.end()) {
             it = m_groups.insert({tag, {}}).first;
+            if (reserveHint > 0)
+                it->second.reserve(reserveHint);
+        }
         it->second.push_back({});
-        return it->second[it->second.size() - 1];
+        return it->second.back();
     }
 
     bool removeGroups(int tag)
@@ -200,14 +231,18 @@ public:
     }
 
     void reserve(size_t n) { m_fields.reserve(n); }
-    void reserveIndex(size_t maxKey) { m_fields.reserveIndex(maxKey); }
 
     void setSpec(std::shared_ptr<GroupSpec> spec)
     {
-        m_groupSpec = std::move(spec);
+        m_groupSpec = spec.get();
     }
 
-    const std::shared_ptr<GroupSpec>& getSpec() const
+    void setSpec(const GroupSpec* spec)
+    {
+        m_groupSpec = spec;
+    }
+
+    const GroupSpec* getSpec() const
     {
         return m_groupSpec;
     }
@@ -222,19 +257,44 @@ public:
     }
 
 private:
+    // Parser-only combined check-and-insert: returns true if the field already
+    // existed (duplicate). Uses a flat bitset for O(1) duplicate detection on
+    // common tags (0..1023), falling back to O(n) LinkedHashMap scan for rare
+    // high-numbered tags. Only valid on FieldMaps populated exclusively through
+    // this method (the bitset is not updated by setField/setFieldView).
+    bool setFieldViewOrDetectDup(int tag, std::string_view value)
+    {
+        if (tag >= 0 && tag < FAST_SEEN_SIZE) [[likely]] {
+            const size_t word = static_cast<size_t>(tag) / 64;
+            const uint64_t bit = uint64_t(1) << (static_cast<unsigned>(tag) % 64);
+            if (m_seenTags[word] & bit)
+                return true; // duplicate
+            m_seenTags[word] |= bit;
+            m_fields.push_back_unchecked_dangerous({tag, value});
+            return false;
+        }
+        const auto [it, inserted] = m_fields.insert({tag, value});
+        return !inserted;
+    }
+
+    // Flat bitset for O(1) duplicate detection in setFieldViewOrDetectDup().
+    // 16 x uint64_t = 128 bytes, covers tags 0..1023.
+    static constexpr int FAST_SEEN_SIZE = 1024;
+    std::array<uint64_t, FAST_SEEN_SIZE / 64> m_seenTags{};
+
     LinkedHashMap<int, std::string_view> m_fields;
-    // Stable storage for owned field values (outbound messages, copies).
-    // Tag-keyed so repeated setField() on the same tag overwrites in-place.
-    // std::unordered_map guarantees reference stability on insert.
-    std::unordered_map<int, std::string> m_ownedStorage;
+    // stable storage for owned field values (i.e. outbound messages, copies)
+    static constexpr size_t OWNED_STORAGE_CAPACITY = 16;
+    std::vector<std::pair<int, std::string>> m_ownedStorage;
     HashMapT<int, std::vector<FieldMap>> m_groups;
 
     // if this is a group present in our dictionary, we can reference additional metadata here
-    std::shared_ptr<GroupSpec> m_groupSpec;
+    const GroupSpec* m_groupSpec = nullptr;
 
-    // Internal: ordered insertion of a pre-resolved view (already owned or guaranteed-live).
+    // (internal only) ordered insertion of a pre-resolved view (already owned or guaranteed-live).
     void insertFieldView(int tag, std::string_view value, bool order);
 
+    friend class Dictionary;
     friend std::ostream& operator<<(std::ostream&, const FieldMap&);
 };
 
@@ -272,21 +332,21 @@ public:
     }
 
     std::string toString(bool internal = false) const;
+    void toString(std::string& out, bool internal = false) const;
 
-    // Access the raw message text (populated for inbound/parsed messages).
     const std::string& getSourceText() const { return m_sourceText; }
 
 private:
     void toStream(std::ostream& ostr, char soh_char = EXTERNAL_SOH_CHAR) const;
     std::string serialize(char soh_char) const;
+    void serializeTo(std::string& result, char soh_char) const;
 
     FieldMap m_header;
     FieldMap m_trailer;
 
     FieldMap m_body;
 
-    // Owned copy of the raw FIX message for parsed messages.
-    // FieldMap string_views reference into this buffer.
+    // owned copy of the raw FIX message for parsed messages
     std::string m_sourceText;
 
     friend class Dictionary;

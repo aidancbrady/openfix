@@ -22,7 +22,6 @@ static const char* roleToString(ThreadRole role)
     return "unknown";
 }
 
-/// Parse a CPU list string like "0-3,8-11" or "2,3,4,5" into a sorted vector of CPU IDs.
 std::vector<int> CpuOrchestrator::parseCpuList(const std::string& list)
 {
     std::vector<int> result;

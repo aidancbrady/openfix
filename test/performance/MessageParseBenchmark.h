@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "BenchmarkFixtures.h"
 #include "BenchmarkFramework.h"
 #include "SessionTestHarness.h"
 
@@ -13,7 +14,7 @@ namespace perf {
 
 inline std::vector<BenchmarkResult> runParseBenchmarks()
 {
-    auto dict = DictionaryRegistry::instance().load(fix_test::kFixDictionaryPath);
+    auto dict = DictionaryRegistry::instance().load(std::string(bench::kBenchmarkDictionaryPath));
 
     SessionSettings settings;
     settings.setBool(SessionSettings::LOUD_PARSING, false);
@@ -22,49 +23,36 @@ inline std::vector<BenchmarkResult> runParseBenchmarks()
     // Timestamps are fixed at setup time; the parser validates the format, not recency.
     const std::string ts = Utils::getUTCTimestamp();
 
-    const std::string heartbeatRaw = fix_test::buildRawMessage("FIX.4.2", {
-        {35, "0"},
-        {49, "INITIATOR"},
-        {56, "ACCEPTOR"},
-        {34, "1"},
-        {52, ts},
-    });
+    const std::string heartbeatRaw = fix_test::buildRawMessage(
+        std::string(bench::kBenchmarkBeginString),
+        bench::heartbeatWireFields(1, ts)
+    );
 
-    const std::string nosRaw = fix_test::buildRawMessage("FIX.4.2", {
-        {35, "D"},
-        {49, "INITIATOR"},
-        {56, "ACCEPTOR"},
-        {34, "1"},
-        {52, ts},
-        {11, "ORDER123456"},
-        {21, "1"},
-        {55, "AAPL"},
-        {54, "1"},
-        {60, ts},
-        {40, "2"},
-        {38, "100"},
-        {44, "150.00"},
-        {59, "0"},
-    });
+    const std::string nosRaw = fix_test::buildRawMessage(
+        std::string(bench::kBenchmarkBeginString),
+        bench::newOrderSingleWireFields(1, ts)
+    );
 
     std::vector<BenchmarkResult> results;
 
-    results.push_back(run(
+    results.push_back(runPrepared(
         "Parse/Heartbeat",
         /*warmup=*/50'000,
         /*measure=*/500'000,
-        [&]() {
-            auto msg = dict->parse(settings, heartbeatRaw);
+        [&]() { return heartbeatRaw; },
+        [&](std::string text) {
+            auto msg = dict->parse(settings, std::move(text));
             (void)msg;
         }
     ));
 
-    results.push_back(run(
+    results.push_back(runPrepared(
         "Parse/NewOrderSingle",
         /*warmup=*/50'000,
         /*measure=*/500'000,
-        [&]() {
-            auto msg = dict->parse(settings, nosRaw);
+        [&]() { return nosRaw; },
+        [&](std::string text) {
+            auto msg = dict->parse(settings, std::move(text));
             (void)msg;
         }
     ));

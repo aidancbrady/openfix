@@ -30,6 +30,7 @@ struct SessionDelegate
     virtual ~SessionDelegate() = default;
 
     virtual void onMessage(Session& session, const Message& msg) {}
+    virtual void onAdminMessage(Session& session, const Message& msg) {}
     virtual void onLogon(Session& session) {}
     virtual void onLogout(Session& session) {}
 };
@@ -99,18 +100,18 @@ private:
     bool load();
     void reset();
 
-    int populateMessage(Message& msg);
+    int populateMessage(Message& msg, long epoch_ms = 0);
     void runMessageRecovery(int from, int to);
 
     void internal_update();
 
     void internal_send(const Message& msg, SendCallback_T callback);
-    void internal_send(std::string msg, SendCallback_T callback);
+    void internal_send(std::string msg, SendCallback_T callback, int64_t epoch_us);
 
 private:
     void processMessage(const Message& msg, long time);
 
-    bool validateMessage(const Message& msg, long time);
+    bool validateMessage(const Message& msg, std::string_view msgType, long time);
     bool validateSeqNum(const Message& msg);
 
     void logout(const std::string& reason, bool terminate);
@@ -120,7 +121,7 @@ private:
     void handleResendRequest(const Message& msg);
     void handleSequenceReset(const Message& msg);
 
-    void sendHeartbeat(long time, std::string testReqID = "");
+    void sendHeartbeat(long time, std::string_view testReqID = "");
     void sendLogon(bool reset);
     void sendLogout(const std::string& reason, bool terminate);
     void sendResendRequest(int from, int to);
@@ -161,6 +162,9 @@ private:
     long m_lastUpdate = 0;
 
     long m_testReqID = 0;
+
+    // hot-path cached timestamp (0 = not cached)
+    int64_t m_cachedEpochUs = 0;
 
     CREATE_LOGGER("Session");
 };

@@ -16,9 +16,6 @@ struct Utils
         return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     }
 
-    // Parse fixed-format FIX timestamp: YYYYMMDD-HH:MM:SS[.fff[fff]]
-    // Pure arithmetic UTC conversion -- no libc calls, no locks.
-    // Uses Howard Hinnant's civil calendar algorithm for days-since-epoch.
     inline static long parseUTCTimestamp(std::string_view timestamp)
     {
         // minimum: "YYYYMMDD-HH:MM:SS" = 17 chars
@@ -38,7 +35,7 @@ struct Utils
         const int minute = parseN(12, 2);
         const int second = parseN(15, 2);
 
-        // Civil calendar -> days since Unix epoch (1970-01-01)
+        // Howard Hinnant's civil calendar algorithm
         const int y   = year - (month <= 2 ? 1 : 0);
         const int era = (y >= 0 ? y : y - 399) / 400;
         const int yoe = y - era * 400;                                             // [0, 399]
@@ -58,7 +55,6 @@ struct Utils
             int frac = 0;
             std::from_chars(timestamp.data() + frac_start, timestamp.data() + frac_start + frac_len, frac);
 
-            // normalize to milliseconds: 3 digits = ms, 6 digits = us -> ms
             if (frac_len <= 3) {
                 for (size_t i = frac_len; i < 3; ++i)
                     frac *= 10;
@@ -73,8 +69,36 @@ struct Utils
         return ms;
     }
 
-    // Format UTC timestamp for FIX protocol: YYYYMMDD-HH:MM:SS.sss (millisecond precision)
-    // Uses thread_local cache: gmtime_r + strftime only called once per second.
+    inline static int64_t getEpochMicros()
+    {
+        return std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    // write FIX UTCTimestamp with ms precision directly into buffer (min 21 bytes)
+    inline static int writeUTCTimestamp(char* buf, long epoch_ms)
+    {
+        const auto epoch_s = static_cast<time_t>(epoch_ms / 1000);
+        const auto ms = static_cast<int>(epoch_ms % 1000);
+
+        thread_local time_t cached_s2 = 0;
+        thread_local char cached_prefix2[18];
+
+        if (epoch_s != cached_s2) {
+            cached_s2 = static_cast<time_t>(epoch_s);
+            std::tm utc{};
+            gmtime_r(&cached_s2, &utc);
+            std::strftime(cached_prefix2, sizeof(cached_prefix2), "%Y%m%d-%H:%M:%S", &utc);
+        }
+
+        std::memcpy(buf, cached_prefix2, 17);
+        buf[17] = '.';
+        buf[18] = static_cast<char>('0' + ms / 100);
+        buf[19] = static_cast<char>('0' + (ms / 10) % 10);
+        buf[20] = static_cast<char>('0' + ms % 10);
+        return 21;
+    }
+
     inline static std::string getUTCTimestamp()
     {
         const auto now = std::chrono::system_clock::now();
@@ -90,17 +114,19 @@ struct Utils
             std::strftime(cached_prefix, sizeof(cached_prefix), "%Y%m%d-%H:%M:%S", &utc);
         }
 
-        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+        const auto ms = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
 
-        char buf[32];
+        char buf[24];
         std::memcpy(buf, cached_prefix, 17);
-        std::snprintf(buf + 17, sizeof(buf) - 17, ".%03ld", ms);
+        buf[17] = '.';
+        buf[18] = static_cast<char>('0' + ms / 100);
+        buf[19] = static_cast<char>('0' + (ms / 10) % 10);
+        buf[20] = static_cast<char>('0' + ms % 10);
 
         return std::string(buf, 21);
     }
 
-    // Format a pre-captured epoch-microsecond timestamp: YYYYMMDD-HH:MM:SS.uuuuuu
-    // Uses thread_local cache: gmtime_r + strftime only called once per second.
     inline static std::string formatTimestampMicros(int64_t epoch_us)
     {
         const auto epoch_s = static_cast<time_t>(epoch_us / 1000000);
@@ -123,7 +149,6 @@ struct Utils
         return std::string(buf, 24);
     }
 
-    // Format UTC timestamp for logging: YYYYMMDD-HH:MM:SS.uuuuuu (microsecond precision)
     inline static std::string getUTCTimestampMicros()
     {
         const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -131,13 +156,8 @@ struct Utils
         return formatTimestampMicros(us);
     }
 
-    // Search for a pre-built tag pattern in a FIX message.
-    // The tag parameter should be the numeric tag string (e.g. "9" for BodyLength).
-    // Builds the search pattern "\x01{tag}=" and finds it starting from idx.
     inline static std::pair<std::string, size_t> getTagValue(const std::string& msg, const std::string& tag, int idx = 0)
     {
-        // build search pattern: SOH + tag + '='
-        // for hot paths, callers should use the overload with a pre-built pattern
         thread_local std::string pattern;
         pattern.clear();
         pattern += '\01';
@@ -154,8 +174,6 @@ struct Utils
         return {msg.substr(begin_it, (end_it - begin_it)), end_it};
     }
 
-    // Zero-copy overload: returns a string_view into the original message.
-    // Takes a pre-built search pattern (SOH + tag + '=').
     inline static std::pair<std::string_view, size_t> getTagValueView(const std::string& msg, const std::string& pattern, size_t patternLen, size_t idx)
     {
         auto begin_it = msg.find(pattern, idx);
@@ -168,8 +186,6 @@ struct Utils
         return {std::string_view(msg.data() + begin_it, end_it - begin_it), end_it};
     }
 
-    // Allocating overload (legacy): returns a string copy.
-    // Takes a pre-built search pattern (SOH + tag + '=').
     inline static std::pair<std::string, size_t> getTagValue(const std::string& msg, const std::string& pattern, size_t patternLen, size_t idx)
     {
         auto begin_it = msg.find(pattern, idx);

@@ -18,10 +18,8 @@ TEST_F(SessionLogonTest, SuccessfulLogon)
     ASSERT_NE(initiator, nullptr);
     ASSERT_NE(acceptor, nullptr);
 
-    EXPECT_TRUE(waitFor([&] { return initiator->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
-    EXPECT_TRUE(waitFor([&] { return acceptor->getNetwork()->isConnected(); }, std::chrono::seconds(3)));
-    EXPECT_TRUE(waitFor([&] { return initiator->getSenderSeqNum() >= 2; }, std::chrono::seconds(3)));
-    EXPECT_TRUE(waitFor([&] { return acceptor->getSenderSeqNum() >= 2; }, std::chrono::seconds(3)));
+    EXPECT_TRUE(waitForSessionReady(initiator));
+    EXPECT_TRUE(waitForSessionReady(acceptor));
 
     app.stop();
 }

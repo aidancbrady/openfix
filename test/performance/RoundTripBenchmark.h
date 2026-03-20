@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "BenchmarkFixtures.h"
 #include "BenchmarkFramework.h"
 #include "NetworkThroughputBenchmark.h"  // for makeAcceptorBenchSettings
 #include "SessionTestHarness.h"
@@ -20,7 +21,7 @@ inline std::vector<BenchmarkResult> runRoundTripBenchmarks()
     constexpr int WARMUP  =  50;
     constexpr int MEASURE = 500;
 
-    std::filesystem::remove_all("./data");
+    bench::resetOpenfixStoreDir();
 
     int port = fix_test::getAvailablePort();
 
@@ -32,14 +33,14 @@ inline std::vector<BenchmarkResult> runRoundTripBenchmarks()
     if (!client.connectWithRetry(port, std::chrono::seconds(5))) {
         std::cerr << "[RoundTrip] Failed to connect\n";
         app.stop();
-        std::filesystem::remove_all("./data");
+        bench::resetOpenfixStoreDir();
         return {};
     }
 
-    if (!client.performLogon()) {
+    if (!client.performLogon("INITIATOR", "ACCEPTOR", 1, 30, std::string(bench::kBenchmarkBeginString))) {
         std::cerr << "[RoundTrip] Logon failed\n";
         app.stop();
-        std::filesystem::remove_all("./data");
+        bench::resetOpenfixStoreDir();
         return {};
     }
 
@@ -47,7 +48,7 @@ inline std::vector<BenchmarkResult> runRoundTripBenchmarks()
     if (!fix_test::waitFor([&] { return session->getTargetSeqNum() >= 2; }, std::chrono::seconds(5))) {
         std::cerr << "[RoundTrip] Server did not receive logon\n";
         app.stop();
-        std::filesystem::remove_all("./data");
+        bench::resetOpenfixStoreDir();
         return {};
     }
 
@@ -58,7 +59,8 @@ inline std::vector<BenchmarkResult> runRoundTripBenchmarks()
 
         if (timed) timer.start();
 
-        client.sendMessage("1", seqNum++, {{FIELD::TestReqID, testReqID}});
+        client.sendMessage("1", seqNum++, {{FIELD::TestReqID, testReqID}},
+            "INITIATOR", "ACCEPTOR", std::string(bench::kBenchmarkBeginString));
 
         // Receive messages until we get the Heartbeat matching our TestReqID.
         // Proactive server heartbeats (no TestReqID) are discarded.
@@ -92,7 +94,7 @@ inline std::vector<BenchmarkResult> runRoundTripBenchmarks()
 
     client.close();
     app.stop();
-    std::filesystem::remove_all("./data");
+    bench::resetOpenfixStoreDir();
 
     return { timer.finalize("RoundTrip/TestReq-HB") };
 }

@@ -39,9 +39,6 @@ void Worker::run()
         }
 
         if (m_spin) {
-            // Busy-poll: avoid kernel CV wakeup overhead at the cost of a dedicated core.
-            // _mm_pause / __builtin_ia32_pause reduces power draw and improves
-            // performance on hyperthreaded cores by hinting the CPU we're spinning.
 #if defined(__x86_64__) || defined(__i386__)
             __builtin_ia32_pause();
 #else

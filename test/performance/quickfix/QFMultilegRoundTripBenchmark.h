@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "BenchmarkFixtures.h"
 #include "BenchmarkFramework.h"
 #include "QFNetworkThroughputBenchmark.h"  // for QFBenchApp base
 #include "QFUtils.h"
@@ -52,13 +53,13 @@ public:
 
         // Build ExecutionReport response
         FIX::Message reply;
-        reply.getHeader().setField(FIX::BeginString("FIX.4.4"));
+        reply.getHeader().setField(FIX::BeginString(std::string(bench::kBenchmarkBeginString)));
         reply.getHeader().setField(FIX::MsgType("8"));
 
         const std::string clOrdID = msg.getField(11);
 
         reply.setField(FIX::OrderID("ORD-" + clOrdID));
-        reply.setField(FIX::StringField(17, "EXEC-" + clOrdID));  // ExecID
+        reply.setField(FIX::StringField(17, clOrdID));  // ExecID
         reply.setField(FIX::StringField(150, "0"));  // ExecType = New
         reply.setField(FIX::StringField(39, "0"));   // OrdStatus = New
         reply.setField(FIX::StringField(55, msg.getField(55)));  // Symbol
@@ -74,63 +75,16 @@ public:
     }
 };
 
-// Locate FIX44.xml in runfiles (needed for AB/multileg support).
-inline std::string qfFIX44DictionaryPath()
-{
-    std::vector<std::string> candidates = {
-        "external/quickfix/spec/FIX44.xml",
-        "../+_repo_rules2+quickfix/spec/FIX44.xml",
-    };
-    for (const auto& c : candidates) {
-        if (std::ifstream(c).good())
-            return c;
-    }
-    namespace fs = std::filesystem;
-    for (auto& entry : fs::recursive_directory_iterator(".")) {
-        if (entry.path().filename() == "FIX44.xml" &&
-            entry.path().string().find("quickfix") != std::string::npos)
-            return entry.path().string();
-    }
-    throw std::runtime_error("Could not locate FIX44.xml dictionary in runfiles");
-}
-
-// Write a QF config with FIX.4.4 for multileg message support.
-inline std::string qfWriteMultilegConfig(int port)
-{
-    std::string path = "/tmp/qf_bench_multileg_" + std::to_string(port) + ".cfg";
-    std::ofstream out(path);
-    out << "[DEFAULT]\n"
-        << "ConnectionType=acceptor\n"
-        << "BeginString=FIX.4.4\n"
-        << "SenderCompID=ACCEPTOR\n"
-        << "TargetCompID=INITIATOR\n"
-        << "SocketAcceptPort=" << port << "\n"
-        << "StartTime=00:00:00\n"
-        << "EndTime=00:00:00\n"
-        << "NonStopSession=Y\n"
-        << "HeartBtInt=60\n"
-        << "CheckLatency=N\n"
-        << "UseDataDictionary=Y\n"
-        << "DataDictionary=" << qfFIX44DictionaryPath() << "\n"
-        << "FileStorePath=/tmp/qf_bench_store_" << port << "\n"
-        << "\n[SESSION]\n"
-        << "BeginString=FIX.4.4\n"
-        << "SenderCompID=ACCEPTOR\n"
-        << "TargetCompID=INITIATOR\n";
-    out.close();
-    return path;
-}
-
 inline std::vector<BenchmarkResult> runQFMultilegRoundTripBenchmarks()
 {
     constexpr int WARMUP  =  50;
     constexpr int MEASURE = 500;
 
     const int port = qfGetAvailablePort();
-    const std::string configPath = qfWriteMultilegConfig(port);
-    const std::string storePath  = "/tmp/qf_bench_store_" + std::to_string(port);
+    const std::string configPath = qfWriteConfig(port);
+    const std::string storePath  = bench::quickfixStoreDir(port).string();
 
-    std::filesystem::create_directories(storePath);
+    bench::resetQuickfixStoreDir(port);
 
     QFMultilegApp app;
     FIX::SessionSettings settings(configPath);
@@ -148,26 +102,12 @@ inline std::vector<BenchmarkResult> runQFMultilegRoundTripBenchmarks()
         return {};
     }
 
-    // Perform logon with FIX.4.4 BeginString
-    {
-        auto logonMsg = qfBuildRawMessage("FIX.4.4", {
-            {35, "A"},
-            {49, "INITIATOR"},
-            {56, "ACCEPTOR"},
-            {34, "1"},
-            {52, qfTimestamp()},
-            {108, "60"},
-            {98, "0"},
-        });
-        client.sendRaw(logonMsg);
-        auto response = client.receiveMessage(std::chrono::seconds(3));
-        if (response.empty() || response.find("35=A") == std::string::npos) {
-            std::cerr << "[QF MultilegRT] Logon failed\n";
-            acceptor.stop();
-            std::filesystem::remove_all(storePath);
-            std::filesystem::remove(configPath);
-            return {};
-        }
+    if (!client.performLogon("INITIATOR", "ACCEPTOR", 1, 30, std::string(bench::kBenchmarkBeginString))) {
+        std::cerr << "[QF MultilegRT] Logon failed\n";
+        acceptor.stop();
+        std::filesystem::remove_all(storePath);
+        std::filesystem::remove(configPath);
+        return {};
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -179,31 +119,8 @@ inline std::vector<BenchmarkResult> runQFMultilegRoundTripBenchmarks()
 
         if (timed) timer.start();
 
-        // Field order must match FIX 4.4 dictionary for repeating group parsing
-        client.sendRaw(qfBuildRawMessage("FIX.4.4", {
-            {35,  "AB"},
-            {49,  "INITIATOR"},
-            {56,  "ACCEPTOR"},
-            {34,  std::to_string(seqNum++)},
-            {52,  qfTimestamp()},
-            {11,  clOrdID},             // ClOrdID
-            {54,  "1"},                 // Side
-            {55,  "SPREAD"},            // Symbol
-            // Repeating group: 3 legs
-            {555, "3"},                 // NoLegs
-            {600, "AAPL"},              // LegSymbol
-            {624, "1"},                 // LegSide
-            {687, "100"},               // LegQty
-            {600, "GOOG"},              // LegSymbol
-            {624, "2"},                 // LegSide
-            {687, "200"},               // LegQty
-            {600, "MSFT"},              // LegSymbol
-            {624, "1"},                 // LegSide
-            {687, "300"},               // LegQty
-            {60,  qfTimestamp()},        // TransactTime
-            {38,  "1000"},              // OrderQty
-            {40,  "2"},                 // OrdType
-        }));
+        client.sendMessage("AB", seqNum++, bench::newOrderMultilegBodyFields(clOrdID, qfTimestamp()),
+            "INITIATOR", "ACCEPTOR", std::string(bench::kBenchmarkBeginString));
 
         // Wait for the ExecutionReport (35=8) response
         while (true) {

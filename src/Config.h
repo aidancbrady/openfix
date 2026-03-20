@@ -238,6 +238,7 @@ struct SessionSettings : Config<SessionSettings>
     static inline ConfigItem<bool> RELAXED_PARSING = createBool("RelaxedParsing", false);
     static inline ConfigItem<bool> LOUD_PARSING = createBool("LoudParsing", true);
     static inline ConfigItem<bool> VALIDATE_REQUIRED_FIELDS = createBool("ValidateRequiredFields");
+    static inline ConfigItem<bool> PARSING_REORDER_TAGS = createBool("ParsingReorderTags", false);
 
     static inline ConfigItem<std::string> START_TIME = createString("StartTime", "00:00:00");
     static inline ConfigItem<std::string> STOP_TIME = createString("StopTime", "00:00:00");
